@@ -1,0 +1,136 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    @apply bg-surface-0 text-text-primary;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+@layer components {
+  /* Custom scrollbar — thin, dark */
+  .custom-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #3a3a4a #111113;
+  }
+  .custom-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .custom-scroll::-webkit-scrollbar-track {
+    background: #111113;
+  }
+  .custom-scroll::-webkit-scrollbar-thumb {
+    background: #3a3a4a;
+    border-radius: 3px;
+  }
+  .custom-scroll::-webkit-scrollbar-thumb:hover {
+    background: #4a4a5e;
+  }
+
+  /* Trading table — tight rows */
+  .trading-table {
+    @apply w-full text-sm border-collapse;
+  }
+  .trading-table thead th {
+    @apply text-text-muted text-xs font-medium uppercase tracking-wider
+           px-3 py-2 border-b border-border-subtle text-right;
+  }
+  .trading-table thead th:first-child {
+    @apply text-left;
+  }
+  .trading-table tbody td {
+    @apply px-3 py-1.5 border-b border-border-subtle text-right
+           font-mono text-text-secondary;
+  }
+  .trading-table tbody td:first-child {
+    @apply text-left font-sans text-text-primary;
+  }
+  .trading-table tbody tr:hover td {
+    @apply bg-surface-4;
+  }
+  .trading-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  /* LTP flash animations */
+  .ltp-flash-up {
+    animation: flash-up 0.6s ease-out forwards;
+  }
+  .ltp-flash-down {
+    animation: flash-down 0.6s ease-out forwards;
+  }
+  .ltp-flash-neutral {
+    animation: flash-neutral 0.4s ease-out forwards;
+  }
+
+  /* Number formatting — tabular nums */
+  .num {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Panel / card base */
+  .panel {
+    @apply bg-surface-1 border border-border-default rounded-lg;
+  }
+  .panel-header {
+    @apply px-4 py-3 border-b border-border-subtle flex items-center justify-between;
+  }
+
+  /* Badge variants */
+  .badge {
+    @apply inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium;
+  }
+  .badge-profit {
+    @apply badge bg-green-500/15 text-profit border border-green-500/20;
+  }
+  .badge-loss {
+    @apply badge bg-red-500/15 text-loss border border-red-500/20;
+  }
+  .badge-neutral {
+    @apply badge bg-surface-3 text-text-secondary border border-border-default;
+  }
+
+  /* Status dot */
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+  .status-dot-live {
+    @apply status-dot bg-profit animate-pulse-dot;
+  }
+  .status-dot-stale {
+    @apply status-dot bg-accent-amber;
+  }
+  .status-dot-dead {
+    @apply status-dot bg-loss;
+  }
+}
+
+@layer utilities {
+  .text-profit { color: #22c55e; }
+  .text-loss   { color: #ef4444; }
+
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+}
