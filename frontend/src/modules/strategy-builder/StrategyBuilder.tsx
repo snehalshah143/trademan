@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Play, BellPlus } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
@@ -19,6 +20,7 @@ export function StrategyBuilder() {
   const navigate = useNavigate()
   const { draftStrategy, setDraft, updateDraft, clearDraft } = useStrategyStore()
   const niftyLTP = useLTPStore((s) => s.getLTP('NIFTY')) ?? 22500
+  const queryClient = useQueryClient()
 
   const [activeTab, setActiveTab] = useState('optionchain')
   const [executeOpen, setExecuteOpen] = useState(false)
@@ -74,6 +76,34 @@ export function StrategyBuilder() {
     const legWithExpiry = legs.find((l) => l.instrument.expiry)
     return legWithExpiry?.instrument.expiry ?? ''
   }, [legs])
+
+  // Eagerly prefetch expiries + option chain whenever underlying or selected expiry changes
+  // so LegEditor has warm cache when it opens
+  useEffect(() => {
+    if (!underlying) return
+    const exchange = 'NFO'
+    // Prefetch all expiries
+    queryClient.prefetchQuery({
+      queryKey: ['legEditorExpiries', underlying, 'CE'],
+      queryFn: () => fetch(`/api/instruments/expiries?symbol=${underlying}&exchange=${exchange}`)
+        .then((r) => r.json()).then((d: { expiries: string[] }) => d.expiries ?? []),
+      staleTime: 60_000,
+    })
+    // Prefetch strikes for the active option chain expiry
+    const activeExpiry = selectedExpiry
+    if (activeExpiry) {
+      queryClient.prefetchQuery({
+        queryKey: ['legEditorStrikes', underlying, activeExpiry],
+        queryFn: () => fetch(`/api/instruments/optionchain?symbol=${underlying}&exchange=${exchange}&expiry=${activeExpiry}&strike_count=50`)
+          .then((r) => r.json())
+          .then((d: { rows: { strike: number }[]; atm_strike: number | null }) => ({
+            strikes: d.rows.map((r) => r.strike).sort((a, b) => a - b),
+            atm: d.atm_strike,
+          })),
+        staleTime: 30_000,
+      })
+    }
+  }, [underlying, selectedExpiry, queryClient])
 
   // Build strategy for payoff (only enabled legs)
   const strategyForPayoff: Strategy | null = useMemo(() => {
@@ -221,7 +251,7 @@ export function StrategyBuilder() {
             </Tabs.Content>
 
             <Tabs.Content value="legeditor" className="h-full overflow-y-auto custom-scroll p-4 space-y-4 data-[state=inactive]:hidden">
-              <LegEditor onAddLeg={handleAddLeg} defaultUnderlying={underlying} />
+              <LegEditor onAddLeg={handleAddLeg} defaultUnderlying={underlying} defaultExpiry={selectedExpiry ?? undefined} />
 
               {legs.length > 0 && (
                 <div className="space-y-1">

@@ -447,8 +447,17 @@ interface LegTableRowProps {
 }
 
 function LegTableRow({ leg, index, onRemove, onEditLots, onEditEntryPrice }: LegTableRowProps) {
-  const ltpEntry  = useLTPStore((s) => s.ltpMap[leg.instrument.symbol])
-  const ltp       = ltpEntry?.tick.ltp ?? leg.currentLTP ?? leg.entryPrice ?? 0
+  const ltpEntry = useLTPStore((s) => s.ltpMap[leg.instrument.symbol])
+  const wsLtp    = ltpEntry?.tick.ltp
+
+  // Fall back to quote API for symbols not in WS stream (options, stock legs, etc.)
+  const { data: quoteData } = useQuote(
+    leg.instrument.symbol,
+    leg.instrument.exchange ?? 'NFO',
+    wsLtp == null,  // only poll when WS has no data
+  )
+
+  const ltp       = wsLtp ?? quoteData?.ltp ?? leg.currentLTP ?? leg.entryPrice ?? 0
   const direction = ltpEntry?.direction ?? 'flat'
   const flashKey  = ltpEntry?.flashKey ?? 0
 

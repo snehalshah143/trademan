@@ -1,5 +1,7 @@
 import { Layers } from 'lucide-react'
 import { useLTPStore } from '@store/ltpStore'
+import { useQuote, spotExchangeFor } from '@hooks/useQuote'
+import { getStaticInstrument } from '@/data/instruments'
 import { generateId } from '@/lib/utils'
 import { PrebuiltStrategyCard } from './PrebuiltStrategyCard'
 import type { StrategyLeg, Exchange, InstrumentType, OrderSide } from '@/types/domain'
@@ -14,24 +16,7 @@ interface PrebuiltStrategiesPanelProps {
   onBuildLegEditor: () => void
 }
 
-const STRIKE_INTERVALS: Record<string, number> = {
-  NIFTY: 50,
-  BANKNIFTY: 100,
-  FINNIFTY: 50,
-  SENSEX: 100,
-  MIDCPNIFTY: 50,
-}
-
-const LOT_SIZES: Record<string, number> = {
-  NIFTY: 75,
-  BANKNIFTY: 15,
-  FINNIFTY: 40,
-  SENSEX: 10,
-  MIDCPNIFTY: 50,
-}
-
-function getATM(spot: number, underlying: string): number {
-  const interval = STRIKE_INTERVALS[underlying] ?? 50
+function getATM(spot: number, interval: number): number {
   return Math.round(spot / interval) * interval
 }
 
@@ -42,9 +27,9 @@ function makeLeg(
   type: InstrumentType,
   side: OrderSide,
   lots: number,
-  ltp: number
+  lotSize: number,
+  ltp: number,
 ): StrategyLeg {
-  const lotSize = LOT_SIZES[underlying] ?? 50
   const expiryShort = expiry ? expiry.replace(/-/g, '').slice(2) : ''
   const symbol = type === 'FUT'
     ? `${underlying}FUT`
@@ -86,7 +71,6 @@ const PREBUILT_CARDS: Array<{ name: string; key: MiniPayoffStrategy }> = [
 
 export function PrebuiltStrategiesPanel({
   underlying,
-  lotSize,
   expiry,
   onLoadPreset,
   onBuildOptionChain,
@@ -94,18 +78,27 @@ export function PrebuiltStrategiesPanel({
 }: PrebuiltStrategiesPanelProps) {
   const ltpMap = useLTPStore((s) => s.ltpMap)
 
-  const spot = ltpMap[underlying]?.tick.ltp ?? 22500
-  const atm = getATM(spot, underlying)
-  const interval = STRIKE_INTERVALS[underlying] ?? 50
+  // Instrument metadata — correct for every underlying including stocks
+  const inst     = getStaticInstrument(underlying)
+  const lotSize  = inst?.lotSize  ?? 1
+  const interval = inst?.strikeInterval ?? 50
+
+  // Spot price: quote API is authoritative (covers stocks via NSE exchange)
+  // Fall back to WS ltpMap for indices that are already subscribed
+  const { data: quoteData } = useQuote(underlying, spotExchangeFor(underlying))
+  const spot = quoteData?.ltp ?? ltpMap[underlying]?.tick.ltp ?? 0
+  const atm  = spot > 0 ? getATM(spot, interval) : 0
+
   const getLTP = (sym: string) => ltpMap[sym]?.tick.ltp ?? 0
 
   function buildLegs(key: MiniPayoffStrategy): StrategyLeg[] {
+    if (atm === 0) return []   // no spot price yet — don't build with wrong strikes
+
     const L = (strike: number, type: InstrumentType, side: OrderSide): StrategyLeg => {
       const exShort = expiry ? expiry.replace(/-/g, '').slice(2) : ''
       const sym = type === 'FUT' ? `${underlying}FUT` : `${underlying}${exShort}${strike}${type}`
-      return makeLeg(underlying, expiry, strike, type, side, 1, getLTP(sym))
+      return makeLeg(underlying, expiry, strike, type, side, 1, lotSize, getLTP(sym))
     }
-    void lotSize // suppress unused warning — kept in props for future use
 
     switch (key) {
       case 'straddle':
@@ -129,7 +122,7 @@ export function PrebuiltStrategiesPanel({
       case 'coveredcall': {
         const futSym = `${underlying}FUT`
         return [
-          makeLeg(underlying, expiry, 0, 'FUT', 'BUY', 1, getLTP(futSym)),
+          makeLeg(underlying, expiry, 0, 'FUT', 'BUY', 1, lotSize, getLTP(futSym)),
           L(atm + 2 * interval, 'CE', 'SELL'),
         ]
       }
@@ -155,6 +148,11 @@ export function PrebuiltStrategiesPanel({
       <div className="w-full">
         <div className="text-xs text-text-muted font-medium mb-3 uppercase tracking-wide">
           Prebuilt Strategies
+          {spot > 0 && (
+            <span className="ml-2 text-text-secondary normal-case font-normal">
+              ATM {atm} · Lot {lotSize}
+            </span>
+          )}
         </div>
         <div className="grid grid-cols-4 gap-2">
           {PREBUILT_CARDS.map(({ name, key }) => (
@@ -162,10 +160,16 @@ export function PrebuiltStrategiesPanel({
               key={key}
               name={name}
               strategy={key}
-              onClick={() => onLoadPreset(buildLegs(key).map((l, i) => ({ ...l, legIndex: i })))}
+              onClick={() => {
+                const legs = buildLegs(key).map((l, i) => ({ ...l, legIndex: i }))
+                if (legs.length > 0) onLoadPreset(legs)
+              }}
             />
           ))}
         </div>
+        {spot === 0 && (
+          <p className="text-xs text-text-muted mt-2 text-center">Loading spot price…</p>
+        )}
       </div>
 
       <div className="flex gap-2 w-full">
