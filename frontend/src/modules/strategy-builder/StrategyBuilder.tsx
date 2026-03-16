@@ -5,6 +5,7 @@ import * as Tabs from '@radix-ui/react-tabs'
 import { useStrategyStore } from '@store/strategyStore'
 import { useLTPStore } from '@store/ltpStore'
 import { INSTRUMENTS } from './InstrumentSelector'
+import { getStaticInstrument } from '@/data/instruments'
 import { InstrumentHeader } from './PositionsTab'
 import { OptionChainView } from './OptionChainView'
 import { LegEditor } from './LegEditor'
@@ -24,7 +25,8 @@ export function StrategyBuilder() {
   const [alertsOpen, setAlertsOpen] = useState(false)
 
   // Shared header state — visible above ALL tabs
-  const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
+  const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)   // option chain expiry (can be weekly)
+  const [selectedFutExpiry, setSelectedFutExpiry] = useState<string | null>(null) // FUT expiry (monthly only)
   const [addFormSide, setAddFormSide] = useState<'BUY' | 'SELL' | null>(null)
 
   // Track which legs are enabled for payoff computation
@@ -63,7 +65,7 @@ export function StrategyBuilder() {
   const underlying = draftStrategy?.underlyingSymbol ?? 'NIFTY'
 
   const lotSize = useMemo(
-    () => INSTRUMENTS.find((i) => i.symbol === underlying)?.lotSize ?? 75,
+    () => getStaticInstrument(underlying)?.lotSize ?? INSTRUMENTS.find((i) => i.symbol === underlying)?.lotSize ?? 75,
     [underlying]
   )
 
@@ -180,9 +182,9 @@ export function StrategyBuilder() {
           underlying={underlying}
           lotSize={lotSize}
           legs={legs}
-          selectedFutExpiry={selectedExpiry}
+          selectedFutExpiry={selectedFutExpiry}
           addFormSide={addFormSide}
-          onSelectFutExpiry={setSelectedExpiry}
+          onSelectFutExpiry={setSelectedFutExpiry}
           onBSClick={handleBSClick}
           onClearLegs={handleClearLegs}
           onChangeUnderlying={handleInstrumentChange}
@@ -269,7 +271,7 @@ export function StrategyBuilder() {
                 enabledLegs={enabledLegs}
                 expiry={expiry}
                 addFormSide={addFormSide}
-                selectedFutExpiry={selectedExpiry}
+                selectedFutExpiry={selectedFutExpiry}
                 onAddLeg={handleAddLeg}
                 onSetAddFormSide={setAddFormSide}
                 onToggleLeg={handleToggleLeg}

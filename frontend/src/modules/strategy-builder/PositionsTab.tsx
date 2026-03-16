@@ -7,6 +7,7 @@ import { format, parseISO } from 'date-fns'
 
 import { useLTPStore } from '@store/ltpStore'
 import { useInstruments } from '@hooks/useInstruments'
+import { useQuote, spotExchangeFor } from '@hooks/useQuote'
 import { fmtPrice, fmtINRCompact, profitLossClass, cn, generateId } from '@/lib/utils'
 import { PrebuiltStrategiesPanel } from './PrebuiltStrategiesPanel'
 import { FuturesSelector } from './FuturesSelector'
@@ -21,7 +22,7 @@ const STRIKE_INTERVALS: Record<string, number> = {
 function makeFutSymbol(underlying: string, expiry: string): string {
   try {
     const d = parseISO(expiry)
-    return `${underlying}${format(d, 'yy')}${format(d, 'MMM').toUpperCase()}FUT`
+    return `${underlying}${format(d, 'dd')}${format(d, 'MMM').toUpperCase()}${format(d, 'yy')}FUT`
   } catch {
     return `${underlying}FUT`
   }
@@ -91,9 +92,17 @@ export function InstrumentHeader({
   const [query, setQuery] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const spot      = ltpMap[underlying]?.tick.ltp      ?? 0
-  const change    = ltpMap[underlying]?.tick.change   ?? 0
-  const changePct = ltpMap[underlying]?.tick.changePct ?? 0
+  // Quote API — day's change (ltp - prev_close), refreshes every 5 s during market hours
+  const { data: quoteData } = useQuote(underlying, spotExchangeFor(underlying))
+
+  // LTP: quote API is authoritative (fetched fresh every 5s during market hours).
+  // Fall back to WS store only before the first quote response arrives.
+  const wsLtp = ltpMap[underlying]?.tick.ltp ?? 0
+  const spot  = quoteData?.ltp ?? wsLtp
+
+  // Day's change from quote API; fall back to WS tick delta if quote not loaded
+  const change    = quoteData?.change    ?? ltpMap[underlying]?.tick.change    ?? 0
+  const changePct = quoteData?.changePct ?? ltpMap[underlying]?.tick.changePct ?? 0
   const isUp      = change >= 0
 
   // Same filtering as InstrumentSelector

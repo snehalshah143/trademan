@@ -5,7 +5,7 @@ import type { WSMessage, WSLTPTickPayload, WSLTPBatchPayload, AlertEvent, WSConn
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const WS_URL = 'ws://localhost:8000/ws/market'
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/market`
 const MAX_RECONNECT_ATTEMPTS = 10
 const BASE_BACKOFF_MS = 500
 const MAX_BACKOFF_MS = 30_000

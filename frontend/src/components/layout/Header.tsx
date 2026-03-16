@@ -3,13 +3,20 @@ import { useLTPStore } from '@store/ltpStore'
 import { useAlertStore } from '@store/alertStore'
 import { useAdapter } from '@adapters/AdapterContext'
 import { fmtPrice } from '@/lib/utils'
+import { useQuote } from '@hooks/useQuote'
 import { AlertPanel } from './AlertPanel'
 
 export function Header() {
   const connectionStatus = useLTPStore((s) => s.connectionStatus)
-  const niftyEntry = useLTPStore((s) => s.ltpMap['NIFTY'])
+  const wsNifty = useLTPStore((s) => s.ltpMap['NIFTY'])
   const { unreadCount, togglePanel } = useAlertStore()
   const { config } = useAdapter()
+
+  // Quote API is authoritative; fall back to WS store before first fetch
+  const { data: niftyQuote } = useQuote('NIFTY', 'NSE_INDEX')
+  const niftyLtp = niftyQuote?.ltp ?? wsNifty?.tick.ltp
+  const niftyChange = niftyQuote?.change ?? 0
+  const niftyIsUp = niftyChange >= 0
 
   const isLive = connectionStatus === 'CONNECTED'
   const isStale = connectionStatus !== 'CONNECTED' && connectionStatus !== 'CONNECTING'
@@ -17,12 +24,17 @@ export function Header() {
   return (
     <header className="relative h-12 bg-surface-1 border-b border-border-subtle flex items-center justify-end px-4 gap-3 shrink-0">
       {/* Spot pill */}
-      {niftyEntry && (
+      {niftyLtp != null && (
         <div className="flex items-center gap-1.5 px-2.5 py-1 bg-surface-3 border border-border-default rounded-md">
           <span className="text-text-muted text-xs">NIFTY</span>
           <span className="num text-num-sm text-accent-amber font-medium">
-            {fmtPrice(niftyEntry.tick.ltp)}
+            {fmtPrice(niftyLtp)}
           </span>
+          {niftyQuote && (
+            <span className={`text-[10px] font-mono ${niftyIsUp ? 'text-profit' : 'text-loss'}`}>
+              {niftyIsUp ? '+' : ''}{fmtPrice(niftyChange, 2)}
+            </span>
+          )}
         </div>
       )}
 

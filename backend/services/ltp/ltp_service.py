@@ -48,6 +48,13 @@ class LTPService:
         await adapter.connect()
         self._running = True
 
+        # Seed default F&O underlyings for WS subscription and poll fallback
+        _default_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"]
+        for sym in _default_symbols:
+            self._poll_symbols.add(sym)
+        if hasattr(adapter, "set_symbols"):
+            adapter.set_symbols(_default_symbols)
+
         try:
             await adapter.subscribe_ws(self._on_tick)
             self._ws_mode = True

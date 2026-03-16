@@ -31,36 +31,36 @@ _SEED: list[tuple] = [
     ("FINNIFTY",   "NIFTY FIN SERVICE",    "NIFTY FINANCIAL SERVICES",   "INDEX", "NFO",   40,   50.0),
     ("SENSEX",     "SENSEX",               "S&P BSE SENSEX",             "INDEX", "BFO",   10,  100.0),
     ("MIDCPNIFTY", "NIFTY MIDCAP SELECT",  "NIFTY MIDCAP SELECT",        "INDEX", "NFO",   50,   25.0),
-    ("RELIANCE",   "RELIANCE",   "Reliance Industries",     "STOCK", "NFO",  250,  50.0),
-    ("TCS",        "TCS",        "Tata Consultancy",        "STOCK", "NFO",  150,  50.0),
-    ("INFY",       "INFY",       "Infosys",                 "STOCK", "NFO",  300,  25.0),
+    ("RELIANCE",   "RELIANCE",   "Reliance Industries",     "STOCK", "NFO",  500,  50.0),
+    ("TCS",        "TCS",        "Tata Consultancy",        "STOCK", "NFO",  175,  50.0),
+    ("INFY",       "INFY",       "Infosys",                 "STOCK", "NFO",  400,  25.0),
     ("HDFCBANK",   "HDFCBANK",   "HDFC Bank",               "STOCK", "NFO",  550,  10.0),
     ("ICICIBANK",  "ICICIBANK",  "ICICI Bank",              "STOCK", "NFO",  700,  10.0),
-    ("SBIN",       "SBIN",       "State Bank of India",     "STOCK", "NFO", 1500,   5.0),
-    ("WIPRO",      "WIPRO",      "Wipro",                   "STOCK", "NFO", 1500,   5.0),
+    ("SBIN",       "SBIN",       "State Bank of India",     "STOCK", "NFO",  750,   5.0),
+    ("WIPRO",      "WIPRO",      "Wipro",                   "STOCK", "NFO", 3000,   5.0),
     ("AXISBANK",   "AXISBANK",   "Axis Bank",               "STOCK", "NFO",  625,  10.0),
-    ("KOTAKBANK",  "KOTAKBANK",  "Kotak Mahindra Bank",     "STOCK", "NFO",  400,  10.0),
-    ("LT",         "LT",         "Larsen & Toubro",         "STOCK", "NFO",  150,  25.0),
-    ("BHARTIARTL", "BHARTIARTL", "Bharti Airtel",           "STOCK", "NFO",  950,   5.0),
-    ("ITC",        "ITC",        "ITC Limited",             "STOCK", "NFO", 3200,   2.0),
-    ("BAJFINANCE", "BAJFINANCE", "Bajaj Finance",           "STOCK", "NFO",  125,  50.0),
-    ("ASIANPAINT", "ASIANPAINT", "Asian Paints",            "STOCK", "NFO",  200,  25.0),
-    ("MARUTI",     "MARUTI",     "Maruti Suzuki",           "STOCK", "NFO",  100, 100.0),
+    ("KOTAKBANK",  "KOTAKBANK",  "Kotak Mahindra Bank",     "STOCK", "NFO", 2000,  10.0),
+    ("LT",         "LT",         "Larsen & Toubro",         "STOCK", "NFO",  175,  25.0),
+    ("BHARTIARTL", "BHARTIARTL", "Bharti Airtel",           "STOCK", "NFO",  475,   5.0),
+    ("ITC",        "ITC",        "ITC Limited",             "STOCK", "NFO", 1600,   2.0),
+    ("BAJFINANCE", "BAJFINANCE", "Bajaj Finance",           "STOCK", "NFO",  750,  50.0),
+    ("ASIANPAINT", "ASIANPAINT", "Asian Paints",            "STOCK", "NFO",  250,  25.0),
+    ("MARUTI",     "MARUTI",     "Maruti Suzuki",           "STOCK", "NFO",   50, 100.0),
     ("TATASTEEL",  "TATASTEEL",  "Tata Steel",              "STOCK", "NFO", 5500,   2.0),
-    ("ONGC",       "ONGC",       "ONGC",                    "STOCK", "NFO", 4850,   2.0),
-    ("POWERGRID",  "POWERGRID",  "Power Grid",              "STOCK", "NFO", 4700,   2.0),
-    ("NTPC",       "NTPC",       "NTPC",                    "STOCK", "NFO", 3750,   2.0),
-    ("ADANIENT",   "ADANIENT",   "Adani Enterprises",       "STOCK", "NFO",  250,  25.0),
+    ("ONGC",       "ONGC",       "ONGC",                    "STOCK", "NFO", 2250,   2.0),
+    ("POWERGRID",  "POWERGRID",  "Power Grid",              "STOCK", "NFO", 1900,   2.0),
+    ("NTPC",       "NTPC",       "NTPC",                    "STOCK", "NFO", 1500,   2.0),
+    ("ADANIENT",   "ADANIENT",   "Adani Enterprises",       "STOCK", "NFO",  309,  25.0),
     ("HINDUNILVR", "HINDUNILVR", "Hindustan Unilever",      "STOCK", "NFO",  300,  25.0),
-    ("SUNPHARMA",  "SUNPHARMA",  "Sun Pharmaceutical",      "STOCK", "NFO",  700,  10.0),
-    ("DRREDDY",    "DRREDDY",    "Dr. Reddy's Lab",         "STOCK", "NFO",  125,  50.0),
+    ("SUNPHARMA",  "SUNPHARMA",  "Sun Pharmaceutical",      "STOCK", "NFO",  350,  10.0),
+    ("DRREDDY",    "DRREDDY",    "Dr. Reddy's Lab",         "STOCK", "NFO",  625,  50.0),
     ("TECHM",      "TECHM",      "Tech Mahindra",           "STOCK", "NFO",  600,  10.0),
-    ("HCLTECH",    "HCLTECH",    "HCL Technologies",        "STOCK", "NFO",  700,  10.0),
+    ("HCLTECH",    "HCLTECH",    "HCL Technologies",        "STOCK", "NFO",  350,  10.0),
     ("ULTRACEMCO", "ULTRACEMCO", "UltraTech Cement",        "STOCK", "NFO",   50, 200.0),
-    ("TITAN",      "TITAN",      "Titan Company",           "STOCK", "NFO",  375,  25.0),
-    ("BAJAJFINSV", "BAJAJFINSV", "Bajaj Finserv",           "STOCK", "NFO", 1000,   5.0),
-    ("NESTLEIND",  "NESTLEIND",  "Nestle India",            "STOCK", "NFO",  100, 100.0),
-    ("DIVISLAB",   "DIVISLAB",   "Divi's Laboratories",     "STOCK", "NFO",  200,  50.0),
+    ("TITAN",      "TITAN",      "Titan Company",           "STOCK", "NFO",  175,  25.0),
+    ("BAJAJFINSV", "BAJAJFINSV", "Bajaj Finserv",           "STOCK", "NFO",  250,   5.0),
+    ("NESTLEIND",  "NESTLEIND",  "Nestle India",            "STOCK", "NFO",  500, 100.0),
+    ("DIVISLAB",   "DIVISLAB",   "Divi's Laboratories",     "STOCK", "NFO",  100,  50.0),
 ]
 
 # Icon metadata for frontend (by category)
@@ -131,21 +131,27 @@ class InstrumentSyncService:
     # ── Seeding ──────────────────────────────────────────────────────────────
 
     async def seed_static_instruments(self, db: AsyncSession) -> int:
-        """Seed DB with static instruments if the table is empty. Returns inserted count."""
-        result = await db.execute(select(CachedInstrument).limit(1))
-        if result.scalar_one_or_none() is not None:
-            return 0
-
+        """Upsert static instruments into DB (insert new, update lot_size on existing). Returns upserted count."""
+        count = 0
         for (sym, disp, full, cat, exch, lot, strike_int) in _SEED:
-            db.add(CachedInstrument(
-                symbol=sym, display_name=disp, full_name=full,
-                category=cat, exchange=exch, lot_size=lot,
-                strike_interval=strike_int, has_options=True,
-                has_futures=True, source="static",
-            ))
+            result = await db.execute(select(CachedInstrument).where(CachedInstrument.symbol == sym))
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                db.add(CachedInstrument(
+                    symbol=sym, display_name=disp, full_name=full,
+                    category=cat, exchange=exch, lot_size=lot,
+                    strike_interval=strike_int, has_options=True,
+                    has_futures=True, source="static",
+                ))
+                count += 1
+            elif existing.source == "static":
+                # Refresh lot_size from seed (keeps broker-enriched records untouched)
+                existing.lot_size = lot
+                existing.strike_interval = strike_int
         await db.commit()
-        logger.info("[InstrumentSync] Seeded %d static instruments", len(_SEED))
-        return len(_SEED)
+        if count:
+            logger.info("[InstrumentSync] Seeded %d new static instruments", count)
+        return count
 
     # ── OpenAlgo fetch ───────────────────────────────────────────────────────
 

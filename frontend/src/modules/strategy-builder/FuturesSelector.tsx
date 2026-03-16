@@ -4,8 +4,10 @@ import { ChevronDown } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 import { useLTPStore } from '@store/ltpStore'
+import { useQuote } from '@hooks/useQuote'
 import { fmtPrice, cn } from '@/lib/utils'
 import { format, parseISO, differenceInCalendarDays, addMonths, lastDayOfMonth, getDay, subDays } from 'date-fns'
+// Note: syntheticFut removed — only real broker prices are shown
 import type { StrategyLeg } from '@/types/domain'
 
 interface FuturesSelectorProps {
@@ -54,21 +56,17 @@ function computeMonthlyExpiries(): string[] {
   return expiries
 }
 
-/** FUT symbol format: NIFTY26MARFUT */
+/** FUT symbol format matching OpenAlgo: NIFTY30MAR26FUT */
 function futSymbol(underlying: string, expiry: string): string {
   try {
     const d = parseISO(expiry)
-    const yy = format(d, 'yy')
+    const dd  = format(d, 'dd')
     const mon = format(d, 'MMM').toUpperCase()
-    return `${underlying}${yy}${mon}FUT`
+    const yy  = format(d, 'yy')
+    return `${underlying}${dd}${mon}${yy}FUT`
   } catch {
     return `${underlying}FUT`
   }
-}
-
-/** Synthetic futures price: Spot × (1 + 0.065 × days/365) */
-function syntheticFut(spot: number, days: number): number {
-  return spot * (1 + 0.065 * (days / 365))
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -76,7 +74,6 @@ function syntheticFut(spot: number, days: number): number {
 export function FuturesSelector({ underlying, legs, selectedExpiry, onSelectExpiry }: FuturesSelectorProps) {
   const [open, setOpen] = useState(false)
   const ltpMap = useLTPStore((s) => s.ltpMap)
-  const spot = ltpMap[underlying]?.tick.ltp ?? 0
 
   // Fetch monthly expiries from API (falls back to computed)
   const { data: apiExpiries } = useQuery({
@@ -98,12 +95,17 @@ export function FuturesSelector({ underlying, legs, selectedExpiry, onSelectExpi
 
   const activeExpiry = selectedExpiry ?? expiries[0] ?? ''
 
-  // Notify parent of the resolved active expiry when expiries first load
+  // When API expiries arrive, always sync parent to the first real expiry
+  // (clears stale computed-fallback dates set before the API responded)
   useEffect(() => {
-    if (!selectedExpiry && expiries.length > 0) {
+    if (apiExpiries && apiExpiries.length > 0) {
+      if (!selectedExpiry || !apiExpiries.includes(selectedExpiry)) {
+        onSelectExpiry(apiExpiries[0])
+      }
+    } else if (!selectedExpiry && expiries.length > 0) {
       onSelectExpiry(expiries[0])
     }
-  }, [expiries, selectedExpiry, onSelectExpiry])
+  }, [apiExpiries, expiries, selectedExpiry, onSelectExpiry])
 
   // FUT lots held per expiry
   function getFutLots(expiry: string): number {
@@ -114,9 +116,12 @@ export function FuturesSelector({ underlying, legs, selectedExpiry, onSelectExpi
 
   // Price display
   const activeSym = futSymbol(underlying, activeExpiry)
-  const activeLTP = ltpMap[activeSym]?.tick.ltp
-  const activeDays = daysTo(activeExpiry)
-  const displayPrice = activeLTP ?? (spot > 0 ? syntheticFut(spot, activeDays) : null)
+
+  // Quote API for active futures price — real data only, no synthetic fallback
+  const { data: futQuote } = useQuote(activeSym, 'NFO', !!activeExpiry)
+  const wsLTP      = ltpMap[activeSym]?.tick.ltp
+  const activeLTP  = futQuote?.ltp ?? wsLTP
+  const displayPrice = activeLTP ?? null
 
   if (expiries.length === 0) return null
 
@@ -155,10 +160,11 @@ export function FuturesSelector({ underlying, legs, selectedExpiry, onSelectExpi
             <tbody>
               {expiries.map((exp) => {
                 const isActive = exp === activeExpiry
-                const sym = futSymbol(underlying, exp)
-                const ltp = ltpMap[sym]?.tick.ltp
+                const sym  = futSymbol(underlying, exp)
+                const wsLp = ltpMap[sym]?.tick.ltp
+                const ltp  = wsLp ?? (isActive ? futQuote?.ltp : undefined)
                 const days = daysTo(exp)
-                const price = ltp ?? (spot > 0 ? syntheticFut(spot, days) : null)
+                const price = ltp ?? null
                 const lots = getFutLots(exp)
 
                 return (
@@ -186,14 +192,9 @@ export function FuturesSelector({ underlying, legs, selectedExpiry, onSelectExpi
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
-                      {price ? (
-                        <div>
-                          <div className="text-text-primary">{fmtPrice(price)}</div>
-                          {!ltp && (
-                            <div className="text-[10px] text-text-muted">synthetic</div>
-                          )}
-                        </div>
-                      ) : '—'}
+                      {price != null
+                        ? <span className="text-text-primary">{fmtPrice(price)}</span>
+                        : <span className="text-text-muted">—</span>}
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
                       {lots > 0 ? (

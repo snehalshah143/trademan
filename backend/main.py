@@ -29,7 +29,21 @@ async def _start_redis_ws_bridge() -> None:
     from ws.hub import hub
 
     async def _relay(tick: dict) -> None:
-        await hub.broadcast(json.dumps(tick))
+        ltp    = float(tick.get("ltp") or 0)
+        change = float(tick.get("change") or 0)
+        prev   = ltp - change
+        change_pct = round((change / prev) * 100, 4) if prev else 0.0
+        msg = {
+            "type": "LTP_TICK",
+            "payload": {
+                "symbol":    tick.get("symbol"),
+                "ltp":       ltp,
+                "change":    change,
+                "changePct": tick.get("changePct", change_pct),
+                "timestamp": tick.get("ts"),
+            },
+        }
+        await hub.broadcast(json.dumps(msg))
 
     global _redis_ws_task
     _redis_ws_task = await redis_service.subscribe_ticks(_relay)
@@ -114,6 +128,7 @@ app.add_middleware(
 # ── Routers ───────────────────────────────────────────────────────────────────
 from api.routes import strategies, alerts, positions, orders, instruments
 from api.routes import settings as settings_router
+from api.routes import quotes as quotes_router
 from ws.endpoint import router as ws_router
 
 app.include_router(strategies.router,       prefix="/api/v1")
@@ -122,6 +137,7 @@ app.include_router(positions.router,        prefix="/api/v1")
 app.include_router(orders.router,           prefix="/api/v1")
 app.include_router(settings_router.router,  prefix="/api/v1")
 app.include_router(instruments.router,      prefix="/api")
+app.include_router(quotes_router.router,    prefix="/api")
 app.include_router(ws_router)
 
 

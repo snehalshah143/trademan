@@ -61,23 +61,65 @@ async def search_instruments(
     return {"instruments": matches[:10]}
 
 
+# ─── FUT expiry helper ────────────────────────────────────────────────────────
+
+async def _get_fut_expiries(symbol: str, exchange: str) -> tuple[list[str], str]:
+    """
+    Fetch futures-only expiries from OpenAlgo (/api/v1/expiry, instrumenttype=futures).
+    Converts 'DD-MON-YY' → 'YYYY-MM-DD'.  Falls back to cached DB expiries on error.
+    """
+    from datetime import datetime
+    host = settings.openalgo_host.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+            resp = await client.post(
+                f"{host}/api/v1/expiry",
+                json={
+                    "apikey":         settings.openalgo_api_key,
+                    "symbol":         symbol,
+                    "exchange":       exchange,
+                    "instrumenttype": "futures",
+                },
+            )
+            data = resp.json()
+        if data.get("status") == "success":
+            iso_dates: list[str] = []
+            for raw in data.get("data", []):
+                try:
+                    iso_dates.append(datetime.strptime(raw, "%d-%b-%y").strftime("%Y-%m-%d"))
+                except ValueError:
+                    pass
+            if iso_dates:
+                return iso_dates, "openalgo"
+    except Exception as exc:
+        logger.warning("[expiries] FUT fetch failed for %s: %s", symbol, exc)
+    return [], "empty"
+
+
 # ─── /expiries ────────────────────────────────────────────────────────────────
 
 @router.get("/expiries")
 async def get_expiries(
     symbol: str = Query(...),
     exchange: str = Query("NFO"),
+    instrument_type: str = Query(None, alias="type"),  # 'FUT' → futures-only from OpenAlgo
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get available expiries for a symbol.
 
+    When type=FUT, calls OpenAlgo /api/v1/expiry with instrumenttype=futures
+    so only real monthly futures expiries are returned (no weekly option dates).
+
     Returns:
       expiries      : list[str]         — plain date strings for backward compat
       expiry_infos  : list[ExpiryInfo]  — rich objects with display + days
-      source        : str               — 'cached' | 'live' | 'computed'
+      source        : str               — 'openalgo' | 'cached' | 'computed'
     """
-    expiry_strings, source = await instrument_sync_service.get_expiries(symbol, exchange, db)
+    if instrument_type and instrument_type.upper() == "FUT":
+        expiry_strings, source = await _get_fut_expiries(symbol, exchange)
+    else:
+        expiry_strings, source = await instrument_sync_service.get_expiries(symbol, exchange, db)
 
     expiry_infos = [
         {
@@ -198,6 +240,12 @@ def _normalise_openalgo_chain(data: dict, expiry: str) -> dict:
     }
 
 
+# Simple in-process TTL cache for option chain (avoids hammering OpenAlgo on every re-render)
+import time as _time
+_chain_cache: dict[str, tuple[float, dict]] = {}  # key → (timestamp, data)
+_CHAIN_TTL = 5  # seconds
+
+
 @router.get("/optionchain")
 async def get_option_chain(
     symbol: str = Query(...),
@@ -205,7 +253,12 @@ async def get_option_chain(
     expiry: str = Query(...),
     strike_count: int = Query(10),
 ):
-    """Proxy option chain data from OpenAlgo (POST /api/v1/optionchain)."""
+    """Proxy option chain data from OpenAlgo (POST /api/v1/optionchain). 5 s in-process cache."""
+    cache_key = f"{symbol}:{exchange}:{expiry}:{strike_count}"
+    cached = _chain_cache.get(cache_key)
+    if cached and (_time.monotonic() - cached[0]) < _CHAIN_TTL:
+        return cached[1]
+
     host = settings.openalgo_host
     if not host.lower().startswith(("http://", "https://")):
         host = f"http://{host}"
@@ -225,10 +278,11 @@ async def get_option_chain(
                     "strike_count": strike_count,
                 },
             )
-            # OpenAlgo may return 4xx with a JSON error body — always parse JSON
-            # if available; only treat as unreachable when we can't get any response.
             try:
-                return _normalise_openalgo_chain(resp.json(), expiry)
+                result = _normalise_openalgo_chain(resp.json(), expiry)
+                if result.get("error") is None:
+                    _chain_cache[cache_key] = (_time.monotonic(), result)
+                return result
             except Exception:
                 logger.debug("Option chain non-JSON response HTTP %s: %s", resp.status_code, resp.text[:200])
     except Exception as exc:
