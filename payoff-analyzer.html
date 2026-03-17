@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Options Payoff Analyzer — NSE/Nifty</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f1f5f9;
+      color: #1e293b;
+      min-height: 100vh;
+      font-size: 13px;
+    }
+
+    /* ── HEADER ── */
+    .page-header {
+      background: #1e293b;
+      color: #fff;
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .header-symbol {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+    .header-badge {
+      background: #334155;
+      border: 1px solid #475569;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    .header-spot {
+      font-size: 15px;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+    .header-spot span { color: #64748b; font-size: 11px; margin-left: 4px; }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .vix-badge {
+      background: rgba(245,158,11,0.15);
+      border: 1px solid #f59e0b;
+      color: #f59e0b;
+      border-radius: 4px;
+      padding: 3px 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .dte-badge {
+      background: rgba(99,102,241,0.15);
+      border: 1px solid #6366f1;
+      color: #818cf8;
+      border-radius: 4px;
+      padding: 3px 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* ── MAIN LAYOUT ── */
+    .main { padding: 14px 20px; display: flex; flex-direction: column; gap: 12px; }
+
+    /* ── METRICS GRID ── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+    }
+    @media (max-width: 1100px) { .metrics-grid { grid-template-columns: repeat(4, 1fr); } }
+    @media (max-width: 700px)  { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
+
+    .metric-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px 14px;
+    }
+    .metric-label {
+      font-size: 10px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      font-weight: 600;
+    }
+    .metric-value {
+      font-size: 16px;
+      font-weight: 700;
+      margin-top: 2px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+    }
+    .metric-sub {
+      font-size: 10px;
+      color: #94a3b8;
+      margin-top: 2px;
+    }
+    .profit  { color: #16a34a; }
+    .loss    { color: #dc2626; }
+    .neutral { color: #1e293b; }
+    .amber   { color: #d97706; }
+
+    /* ── GREEKS BAR ── */
+    .greeks-bar {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .greek-item { display: flex; align-items: center; gap: 6px; }
+    .greek-label {
+      font-size: 11px;
+      color: #64748b;
+      font-style: italic;
+    }
+    .greek-value {
+      font-size: 13px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .separator { width: 1px; height: 20px; background: #e2e8f0; }
+
+    /* ── CHART ── */
+    .chart-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .chart-title { font-size: 12px; font-weight: 600; color: #475569; }
+    .chart-legend { display: flex; align-items: center; gap: 14px; }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #64748b; }
+    .legend-line {
+      width: 22px; height: 2px;
+      border-radius: 1px;
+    }
+    .legend-line.expiry { background: #475569; }
+    .legend-line.today { background: #3b82f6; }
+    .legend-line.today.dashed {
+      background: transparent;
+      border-top: 2px dashed #3b82f6;
+    }
+    .chart-wrapper { position: relative; height: 320px; }
+
+    /* ── BOTTOM SECTION ── */
+    .bottom-grid {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 12px;
+    }
+    @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } }
+
+    /* ── LEGS TABLE ── */
+    .section-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 10px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      font-size: 10px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 6px 8px;
+      text-align: left;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    tbody td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #f8fafc;
+      vertical-align: middle;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: #f8fafc; }
+
+    .inp {
+      width: 100%;
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 12px;
+      background: #f8fafc;
+      color: #1e293b;
+      font-family: inherit;
+      transition: border-color 0.15s;
+    }
+    .inp:focus { outline: none; border-color: #3b82f6; background: #fff; }
+    select.inp { cursor: pointer; }
+
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .pill-buy  { background: #dbeafe; color: #1d4ed8; }
+    .pill-sell { background: #fee2e2; color: #b91c1c; }
+    .pill-ce   { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+    .pill-pe   { background: #fdf2f8; color: #9d174d; border: 1px solid #fbcfe8; }
+
+    .btn-remove {
+      background: none;
+      border: none;
+      color: #cbd5e1;
+      cursor: pointer;
+      font-size: 16px;
+      padding: 0 4px;
+      line-height: 1;
+      transition: color 0.15s;
+    }
+    .btn-remove:hover { color: #dc2626; }
+
+    .btn-add {
+      margin-top: 10px;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      border-radius: 6px;
+      padding: 7px;
+      width: 100%;
+      cursor: pointer;
+      font-size: 12px;
+      color: #64748b;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+    .btn-add:hover { background: #f1f5f9; border-color: #3b82f6; color: #3b82f6; }
+
+    /* ── CONTROLS ── */
+    .controls-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .ctrl-group { display: flex; flex-direction: column; gap: 4px; }
+    .ctrl-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .ctrl-row { display: flex; gap: 8px; }
+
+    .btn-primary {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 9px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s;
+      width: 100%;
+    }
+    .btn-primary:hover { background: #2563eb; }
+
+    .btn-preset {
+      flex: 1;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 5px;
+      padding: 6px 8px;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      color: #64748b;
+      transition: all 0.15s;
+    }
+    .btn-preset:hover { background: #f1f5f9; border-color: #3b82f6; color: #3b82f6; }
+
+    /* ── BREAKEVEN PILLS ── */
+    .be-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .be-chip {
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #92400e;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<div class="page-header">
+  <div class="header-left">
+    <div class="header-symbol">⚡ Options Payoff Analyzer</div>
+    <div id="hdr-strategy" class="header-badge">Iron Fly</div>
+    <div class="header-spot">
+      <span id="hdr-underlying">NIFTY</span>
+      &nbsp;
+      <span id="hdr-spot-val">23,355</span>
+      <span>SPOT</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="vix-badge">VIX&nbsp;21.64</div>
+    <div class="dte-badge" id="hdr-dte">DTE 15</div>
+    <div style="color:#64748b;font-size:11px;" id="hdr-time"></div>
+  </div>
+</div>
+
+<!-- ── MAIN ── -->
+<div class="main">
+
+  <!-- METRICS -->
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-label">Total MTM</div>
+      <div class="metric-value" id="m-mtm">—</div>
+      <div class="metric-sub" id="m-mtm-sub">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Max Profit</div>
+      <div class="metric-value profit" id="m-maxp">—</div>
+      <div class="metric-sub" id="m-maxp-sub">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Max Loss</div>
+      <div class="metric-value loss" id="m-maxl">—</div>
+      <div class="metric-sub" id="m-maxl-sub">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Margin (Approx)</div>
+      <div class="metric-value neutral" id="m-margin">—</div>
+      <div class="metric-sub">20% of SELL notional</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">POP</div>
+      <div class="metric-value neutral" id="m-pop">—</div>
+      <div class="metric-sub">Probability of Profit</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Risk / Reward</div>
+      <div class="metric-value neutral" id="m-rr">—</div>
+      <div class="metric-sub">Reward : Risk</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Breakevens</div>
+      <div id="m-be" class="be-chips" style="margin-top:4px;">—</div>
+      <div class="metric-sub" id="m-be-sub">—</div>
+    </div>
+  </div>
+
+  <!-- GREEKS -->
+  <div class="greeks-bar">
+    <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Greeks (Net)</div>
+    <div class="separator"></div>
+    <div class="greek-item">
+      <span class="greek-label">Δ Delta</span>
+      <span class="greek-value" id="g-delta">—</span>
+    </div>
+    <div class="separator"></div>
+    <div class="greek-item">
+      <span class="greek-label">Γ Gamma</span>
+      <span class="greek-value" id="g-gamma">—</span>
+    </div>
+    <div class="separator"></div>
+    <div class="greek-item">
+      <span class="greek-label">Θ Theta</span>
+      <span class="greek-value" id="g-theta">—</span>
+    </div>
+    <div class="separator"></div>
+    <div class="greek-item">
+      <span class="greek-label">V Vega</span>
+      <span class="greek-value" id="g-vega">—</span>
+    </div>
+    <div class="separator"></div>
+    <div class="greek-item" style="margin-left:auto;">
+      <span class="greek-label">IV (avg)</span>
+      <span class="greek-value" id="g-iv">—</span>
+    </div>
+  </div>
+
+  <!-- CHART -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div class="chart-title">PAYOFF DIAGRAM</div>
+      <div class="chart-legend">
+        <div class="legend-item">
+          <div class="legend-line expiry"></div>
+          <span>At Expiry</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-line today"></div>
+          <span>Today (BS)</span>
+        </div>
+        <div class="legend-item">
+          <div style="width:10px;height:10px;background:rgba(22,163,74,0.3);border-radius:2px;"></div>
+          <span>Profit Zone</span>
+        </div>
+        <div class="legend-item">
+          <div style="width:10px;height:10px;background:rgba(220,38,38,0.3);border-radius:2px;"></div>
+          <span>Loss Zone</span>
+        </div>
+      </div>
+    </div>
+    <div class="chart-wrapper">
+      <canvas id="payoffChart"></canvas>
+    </div>
+  </div>
+
+  <!-- BOTTOM: Legs + Controls -->
+  <div class="bottom-grid">
+
+    <!-- LEGS TABLE -->
+    <div class="section-card">
+      <div class="section-title">Strategy Legs</div>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Type</th>
+            <th>Side</th>
+            <th>Strike</th>
+            <th>Premium (₹)</th>
+            <th>Lots</th>
+            <th>IV%</th>
+            <th>Current (₹)</th>
+            <th>Leg P&amp;L</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="legs-tbody"></tbody>
+      </table>
+      <button class="btn-add" onclick="addLeg()">+ Add Leg</button>
+    </div>
+
+    <!-- CONTROLS -->
+    <div class="section-card">
+      <div class="section-title">Controls</div>
+      <div class="controls-grid">
+
+        <div class="ctrl-group">
+          <div class="ctrl-label">Underlying</div>
+          <select class="inp" id="ctrl-underlying" onchange="recalc()">
+            <option value="NIFTY">NIFTY</option>
+            <option value="BANKNIFTY">BANKNIFTY</option>
+            <option value="FINNIFTY">FINNIFTY</option>
+          </select>
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-label">Spot Price (₹)</div>
+          <input class="inp" type="number" id="ctrl-spot" value="23355" step="1" oninput="recalc()" />
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-label">Lot Size</div>
+          <input class="inp" type="number" id="ctrl-lotsize" value="50" step="1" oninput="recalc()" />
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-label">Days to Expiry (DTE)</div>
+          <input class="inp" type="number" id="ctrl-dte" value="15" step="1" min="0" oninput="recalc()" />
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-label">Risk-Free Rate (%)</div>
+          <input class="inp" type="number" id="ctrl-rate" value="7" step="0.1" oninput="recalc()" />
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-label">Presets</div>
+          <div class="ctrl-row">
+            <button class="btn-preset" onclick="loadPreset('ironfly')">Iron Fly</button>
+            <button class="btn-preset" onclick="loadPreset('ironcondor')">Iron Condor</button>
+          </div>
+          <div class="ctrl-row" style="margin-top:4px;">
+            <button class="btn-preset" onclick="loadPreset('straddle')">Straddle</button>
+            <button class="btn-preset" onclick="loadPreset('strangle')">Strangle</button>
+          </div>
+          <div class="ctrl-row" style="margin-top:4px;">
+            <button class="btn-preset" onclick="loadPreset('bullcall')">Bull Call</button>
+            <button class="btn-preset" onclick="loadPreset('bearput')">Bear Put</button>
+          </div>
+        </div>
+
+        <button class="btn-primary" onclick="recalc()">⟳ Recalculate</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Math / BS ────────────────────────────────────────────────────────────────
+
+function ncdf(x) {
+  const a = [0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429];
+  const k = 1 / (1 + 0.2316419 * Math.abs(x));
+  const pdf = Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+  const poly = k * (a[0] + k * (a[1] + k * (a[2] + k * (a[3] + k * a[4]))));
+  const r = 1 - pdf * poly;
+  return x >= 0 ? r : 1 - r;
+}
+function npdf(x) { return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI); }
+
+function bsPrice(S, K, T, r, sigma, type) {
+  if (T <= 0) return type === 'CE' ? Math.max(0, S - K) : Math.max(0, K - S);
+  const sq = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sq);
+  const d2 = d1 - sigma * sq;
+  if (type === 'CE') return S * ncdf(d1) - K * Math.exp(-r * T) * ncdf(d2);
+  return K * Math.exp(-r * T) * ncdf(-d2) - S * ncdf(-d1);
+}
+
+function bsGreeks(S, K, T, r, sigma, type) {
+  if (T < 0.0001 || sigma < 0.001) {
+    const d = type === 'CE' ? (S > K ? 1 : 0) : (S < K ? -1 : 0);
+    return { delta: d, gamma: 0, theta: 0, vega: 0 };
+  }
+  const sq = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sq);
+  const d2 = d1 - sigma * sq;
+  const pd = npdf(d1);
+  const delta = type === 'CE' ? ncdf(d1) : ncdf(d1) - 1;
+  const gamma = pd / (S * sigma * sq);
+  const theta = (-(S * pd * sigma) / (2 * sq)
+    - r * K * Math.exp(-r * T) * (type === 'CE' ? ncdf(d2) : ncdf(-d2))) / 365;
+  const vega = S * pd * sq / 100;
+  return { delta, gamma, theta, vega };
+}
+
+function impliedVol(mkt, S, K, T, r, type) {
+  if (T <= 0) return 0.20;
+  const intrin = type === 'CE' ? Math.max(0, S - K) : Math.max(0, K - S);
+  if (mkt <= intrin + 0.01) return 0.001;
+  let sig = 0.20;
+  for (let i = 0; i < 200; i++) {
+    const p = bsPrice(S, K, T, r, sig, type);
+    const diff = p - mkt;
+    if (Math.abs(diff) < 0.01) break;
+    const sq = Math.sqrt(T);
+    const d1 = (Math.log(S / K) + (r + 0.5 * sig * sig) * T) / (sig * sq);
+    const vg = S * npdf(d1) * sq;
+    if (Math.abs(vg) < 1e-8) break;
+    sig = sig - diff / vg;
+    sig = Math.max(0.001, Math.min(10, sig));
+  }
+  return sig;
+}
+
+// ─── Formatting ───────────────────────────────────────────────────────────────
+
+function fmtINR(v, decimals = 0) {
+  const s = v < 0 ? '-' : '';
+  const a = Math.abs(v);
+  return s + '₹' + a.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+function fmtINRc(v) {
+  const s = v < 0 ? '-' : '';
+  const a = Math.abs(v);
+  if (a >= 100000) return s + '₹' + (a / 100000).toFixed(2) + 'L';
+  if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(1) + 'K';
+  return s + '₹' + a.toFixed(0);
+}
+function fmtPct(v) { return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'; }
+
+// ─── State ───────────────────────────────────────────────────────────────────
+
+let legs = [
+  { type: 'CE', side: 'SELL', strike: 23000, premium: 200, lots: 1 },
+  { type: 'CE', side: 'BUY',  strike: 24000, premium: 80,  lots: 1 },
+  { type: 'PE', side: 'SELL', strike: 23000, premium: 180, lots: 1 },
+  { type: 'PE', side: 'BUY',  strike: 22000, premium: 70,  lots: 1 },
+];
+
+const PRESETS = {
+  ironfly: {
+    spot: 23000,
+    legs: [
+      { type:'CE', side:'SELL', strike:23000, premium:200, lots:1 },
+      { type:'CE', side:'BUY',  strike:24000, premium:80,  lots:1 },
+      { type:'PE', side:'SELL', strike:23000, premium:180, lots:1 },
+      { type:'PE', side:'BUY',  strike:22000, premium:70,  lots:1 },
+    ]
+  },
+  ironcondor: {
+    spot: 23000,
+    legs: [
+      { type:'CE', side:'SELL', strike:23500, premium:120, lots:1 },
+      { type:'CE', side:'BUY',  strike:24500, premium:50,  lots:1 },
+      { type:'PE', side:'SELL', strike:22500, premium:110, lots:1 },
+      { type:'PE', side:'BUY',  strike:21500, premium:45,  lots:1 },
+    ]
+  },
+  straddle: {
+    spot: 23000,
+    legs: [
+      { type:'CE', side:'SELL', strike:23000, premium:200, lots:1 },
+      { type:'PE', side:'SELL', strike:23000, premium:180, lots:1 },
+    ]
+  },
+  strangle: {
+    spot: 23000,
+    legs: [
+      { type:'CE', side:'SELL', strike:23500, premium:120, lots:1 },
+      { type:'PE', side:'SELL', strike:22500, premium:110, lots:1 },
+    ]
+  },
+  bullcall: {
+    spot: 23000,
+    legs: [
+      { type:'CE', side:'BUY',  strike:23000, premium:200, lots:1 },
+      { type:'CE', side:'SELL', strike:24000, premium:80,  lots:1 },
+    ]
+  },
+  bearput: {
+    spot: 23000,
+    legs: [
+      { type:'PE', side:'BUY',  strike:23000, premium:180, lots:1 },
+      { type:'PE', side:'SELL', strike:22000, premium:70,  lots:1 },
+    ]
+  },
+};
+
+// ─── Payoff Computation ───────────────────────────────────────────────────────
+
+function intrinsic(spot, strike, type) {
+  return type === 'CE' ? Math.max(0, spot - strike) : Math.max(0, strike - spot);
+}
+
+function payoffAtExpiry(spot, legs, lotSize) {
+  return legs.reduce((sum, leg) => {
+    const mult = leg.side === 'SELL' ? -1 : 1;
+    return sum + mult * (intrinsic(spot, leg.strike, leg.type) - leg.premium) * leg.lots * lotSize;
+  }, 0);
+}
+
+function payoffToday(spot, legs, lotSize, dte, r, ivs) {
+  const T = dte / 365;
+  return legs.reduce((sum, leg, i) => {
+    const curr = T > 0 ? bsPrice(spot, leg.strike, T, r, ivs[i], leg.type)
+                       : intrinsic(spot, leg.strike, leg.type);
+    const mult = leg.side === 'SELL' ? -1 : 1;
+    return sum + mult * (curr - leg.premium) * leg.lots * lotSize;
+  }, 0);
+}
+
+// ─── Chart ────────────────────────────────────────────────────────────────────
+
+let chart = null;
+
+function buildChart(spots, expiryPnL, todayPnL, currentSpot, mtm) {
+  const ctx = document.getElementById('payoffChart').getContext('2d');
+  if (chart) chart.destroy();
+
+  const labels = spots.map(s => Math.round(s));
+  const fmt = v => fmtINRc(v);
+
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'At Expiry',
+          data: expiryPnL,
+          borderColor: ctx => {
+            const seg = ctx.p1?.parsed?.y;
+            return seg >= 0 ? '#16a34a' : '#dc2626';
+          },
+          borderWidth: 2.5,
+          tension: 0,
+          pointRadius: 0,
+          fill: { target: 'origin', above: 'rgba(22,163,74,0.18)', below: 'rgba(220,38,38,0.18)' },
+          segment: { borderColor: ctx => (ctx.p1.parsed.y >= 0 ? '#16a34a' : '#dc2626') },
+          order: 2,
+        },
+        {
+          label: "Today's P&L",
+          data: todayPnL,
+          borderColor: '#3b82f6',
+          borderWidth: 2,
+          borderDash: [5, 4],
+          tension: 0.35,
+          pointRadius: 0,
+          fill: false,
+          order: 1,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(15,23,42,0.95)',
+          titleColor: '#94a3b8',
+          bodyColor: '#e2e8f0',
+          borderColor: '#334155',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            title: items => 'Spot: ₹' + Number(items[0].label).toLocaleString('en-IN'),
+            label: item => {
+              const v = item.raw;
+              const s = v >= 0 ? '+' : '';
+              return ` ${item.dataset.label}: ${s}${fmtINR(v, 2)}`;
+            },
+          }
+        },
+        annotation: {
+          annotations: {
+            spotLine: {
+              type: 'line',
+              xMin: currentSpot,
+              xMax: currentSpot,
+              borderColor: '#f59e0b',
+              borderWidth: 2,
+              borderDash: [6, 4],
+              label: {
+                display: true,
+                content: `Spot ₹${currentSpot.toLocaleString('en-IN')}  |  MTM ${mtm >= 0 ? '+' : ''}${fmtINR(mtm, 0)}`,
+                position: 'start',
+                yAdjust: -8,
+                backgroundColor: '#f59e0b',
+                color: '#1e293b',
+                font: { size: 10.5, weight: 'bold' },
+                padding: { x: 8, y: 4 },
+                borderRadius: 4,
+              }
+            },
+            zeroLine: {
+              type: 'line',
+              yMin: 0, yMax: 0,
+              borderColor: '#94a3b8',
+              borderWidth: 1,
+              borderDash: [3, 3],
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(148,163,184,0.15)' },
+          ticks: {
+            color: '#94a3b8',
+            font: { size: 10 },
+            maxTicksLimit: 12,
+            callback: v => '₹' + Number(v).toLocaleString('en-IN'),
+          }
+        },
+        y: {
+          grid: { color: 'rgba(148,163,184,0.15)' },
+          ticks: {
+            color: '#94a3b8',
+            font: { size: 10 },
+            callback: v => fmtINRc(v),
+          }
+        }
+      }
+    }
+  });
+}
+
+// ─── Legs Table ──────────────────────────────────────────────────────────────
+
+function renderLegsTable(ivs, currentPrices, legPnls) {
+  const tbody = document.getElementById('legs-tbody');
+  tbody.innerHTML = '';
+  legs.forEach((leg, i) => {
+    const iv = (ivs[i] * 100).toFixed(1);
+    const curr = currentPrices[i].toFixed(2);
+    const pnl = legPnls[i];
+    const pnlFmt = (pnl >= 0 ? '+' : '') + fmtINRc(pnl);
+    const pnlClass = pnl >= 0 ? 'profit' : 'loss';
+
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td style="color:#94a3b8;font-size:10px;">${i + 1}</td>
+      <td>
+        <select class="inp" style="width:56px;" data-i="${i}" data-f="type" onchange="updateLeg(this)">
+          <option${leg.type==='CE'?' selected':''}>CE</option>
+          <option${leg.type==='PE'?' selected':''}>PE</option>
+        </select>
+      </td>
+      <td>
+        <select class="inp" style="width:60px;" data-i="${i}" data-f="side" onchange="updateLeg(this)">
+          <option${leg.side==='BUY'?' selected':''}>BUY</option>
+          <option${leg.side==='SELL'?' selected':''}>SELL</option>
+        </select>
+      </td>
+      <td><input class="inp" type="number" style="width:78px;" value="${leg.strike}" data-i="${i}" data-f="strike" oninput="updateLeg(this)" /></td>
+      <td><input class="inp" type="number" style="width:72px;" value="${leg.premium}" data-i="${i}" data-f="premium" step="0.05" oninput="updateLeg(this)" /></td>
+      <td><input class="inp" type="number" style="width:52px;" value="${leg.lots}" data-i="${i}" data-f="lots" min="1" oninput="updateLeg(this)" /></td>
+      <td style="color:#64748b;font-size:11px;white-space:nowrap;">${iv}%</td>
+      <td style="font-size:11px;font-weight:600;white-space:nowrap;color:#475569;">₹${curr}</td>
+      <td class="${pnlClass}" style="font-weight:700;font-size:12px;white-space:nowrap;">${pnlFmt}</td>
+      <td><button class="btn-remove" onclick="removeLeg(${i})">×</button></td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+function updateLeg(el) {
+  const i = +el.dataset.i;
+  const f = el.dataset.f;
+  const v = el.value;
+  legs[i][f] = (f === 'type' || f === 'side') ? v : parseFloat(v) || 0;
+  recalc();
+}
+
+function removeLeg(i) {
+  legs.splice(i, 1);
+  recalc();
+}
+
+function addLeg() {
+  const spot = +document.getElementById('ctrl-spot').value || 23000;
+  legs.push({ type: 'CE', side: 'SELL', strike: Math.round(spot / 50) * 50, premium: 100, lots: 1 });
+  recalc();
+}
+
+function loadPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+  document.getElementById('ctrl-spot').value = p.spot;
+  legs = p.legs.map(l => ({ ...l }));
+  recalc();
+}
+
+// ─── Main Recalculate ─────────────────────────────────────────────────────────
+
+function recalc() {
+  const spot    = +document.getElementById('ctrl-spot').value    || 23355;
+  const lotSize = +document.getElementById('ctrl-lotsize').value || 50;
+  const dte     = +document.getElementById('ctrl-dte').value     || 15;
+  const rate    = (+document.getElementById('ctrl-rate').value   || 7) / 100;
+  const T       = dte / 365;
+
+  if (legs.length === 0) return;
+
+  // Back-calculate IV for each leg using entry spot (assume entry at current spot)
+  const ivs = legs.map(leg => {
+    const iv = impliedVol(leg.premium, spot, leg.strike, T, rate, leg.type);
+    return isFinite(iv) && iv > 0 ? iv : 0.20;
+  });
+
+  // Spot range: ±14% centred on spot, at least covering all strikes ±10%
+  const strikes = legs.map(l => l.strike);
+  const atmLow  = Math.min(spot, ...strikes) * 0.87;
+  const atmHigh = Math.max(spot, ...strikes) * 1.13;
+  const spotMin = Math.floor(Math.min(spot * 0.87, atmLow) / 50) * 50;
+  const spotMax = Math.ceil( Math.max(spot * 1.13, atmHigh) / 50) * 50;
+  const N = 250;
+  const step = (spotMax - spotMin) / (N - 1);
+  const spots = Array.from({ length: N }, (_, i) => spotMin + step * i);
+
+  const expiryPnL = spots.map(s => payoffAtExpiry(s, legs, lotSize));
+  const todayPnL  = spots.map(s => payoffToday(s, legs, lotSize, dte, rate, ivs));
+
+  // Current MTM
+  const mtm = payoffToday(spot, legs, lotSize, dte, rate, ivs);
+
+  // Max profit / loss
+  const maxP = Math.max(...expiryPnL);
+  const maxL = Math.min(...expiryPnL);
+  const unlimited = 10_000_000;
+
+  // Breakevens (zero crossings)
+  const bes = [];
+  for (let i = 1; i < expiryPnL.length; i++) {
+    const p = expiryPnL[i - 1], c = expiryPnL[i];
+    if (p * c < 0) {
+      const be = spots[i - 1] + (0 - p) * ((spots[i] - spots[i - 1]) / (c - p));
+      bes.push(Math.round(be));
+    }
+  }
+
+  // POP
+  const pop = (expiryPnL.filter(v => v > 0).length / N) * 100;
+
+  // Margin
+  const margin = legs
+    .filter(l => l.side === 'SELL')
+    .reduce((s, l) => s + l.strike * l.lots * lotSize * 0.20, 0);
+
+  // Greeks (at current spot, using each leg's IV)
+  let netDelta = 0, netGamma = 0, netTheta = 0, netVega = 0, ivSum = 0;
+  const currentPrices = [];
+  const legPnls = [];
+
+  legs.forEach((leg, i) => {
+    const g = bsGreeks(spot, leg.strike, T, rate, ivs[i], leg.type);
+    const mult = leg.side === 'SELL' ? -1 : 1;
+    const scaledLots = leg.lots * lotSize;
+    netDelta += mult * g.delta * scaledLots;
+    netGamma += mult * g.gamma * scaledLots;
+    netTheta += mult * g.theta * scaledLots;
+    netVega  += mult * g.vega  * scaledLots;
+    ivSum += ivs[i];
+
+    const curr = T > 0 ? bsPrice(spot, leg.strike, T, rate, ivs[i], leg.type)
+                       : intrinsic(spot, leg.strike, leg.type);
+    currentPrices.push(curr);
+    legPnls.push(mult * (curr - leg.premium) * leg.lots * lotSize);
+  });
+
+  const avgIV = (ivSum / legs.length) * 100;
+
+  // ── Update metrics ──
+
+  const mtmEl = document.getElementById('m-mtm');
+  mtmEl.textContent = fmtINRc(mtm);
+  mtmEl.className = 'metric-value ' + (mtm >= 0 ? 'profit' : 'loss');
+  document.getElementById('m-mtm-sub').textContent = fmtPct((mtm / Math.abs(maxP || 1)) * 100) + ' of max profit';
+
+  document.getElementById('m-maxp').textContent = maxP > unlimited ? 'Unlimited' : fmtINRc(maxP);
+  document.getElementById('m-maxp-sub').textContent = maxP > unlimited ? '' : fmtINR(maxP, 0);
+  document.getElementById('m-maxl').textContent = maxL < -unlimited ? 'Unlimited' : fmtINRc(maxL);
+  document.getElementById('m-maxl-sub').textContent = maxL < -unlimited ? '' : fmtINR(maxL, 0);
+  document.getElementById('m-margin').textContent = fmtINRc(margin);
+  document.getElementById('m-pop').textContent = pop.toFixed(1) + '%';
+
+  const rr = (maxP > 0 && maxL < 0) ? (maxP / Math.abs(maxL)).toFixed(2) : 'NA';
+  document.getElementById('m-rr').textContent = rr === 'NA' ? 'NA' : rr + 'x';
+
+  const beEl = document.getElementById('m-be');
+  if (bes.length === 0) {
+    beEl.innerHTML = '<span class="be-chip" style="color:#94a3b8;border-color:#e2e8f0;background:#f8fafc;">None</span>';
+    document.getElementById('m-be-sub').textContent = 'No breakeven in range';
+  } else {
+    beEl.innerHTML = bes.map(be => {
+      const pct = ((be - spot) / spot * 100).toFixed(1);
+      return `<span class="be-chip">₹${be.toLocaleString('en-IN')} (${pct >= 0 ? '+' : ''}${pct}%)</span>`;
+    }).join('');
+    document.getElementById('m-be-sub').textContent = bes.length + ' breakeven' + (bes.length > 1 ? 's' : '');
+  }
+
+  // ── Update Greeks ──
+
+  const dEl = document.getElementById('g-delta');
+  dEl.textContent = netDelta.toFixed(3);
+  dEl.className = 'greek-value ' + (netDelta >= 0 ? 'profit' : 'loss');
+
+  document.getElementById('g-gamma').textContent = netGamma.toFixed(5);
+  const tEl = document.getElementById('g-theta');
+  tEl.textContent = fmtINRc(netTheta);
+  tEl.className = 'greek-value ' + (netTheta >= 0 ? 'profit' : 'loss');
+  document.getElementById('g-vega').textContent = fmtINRc(netVega);
+  document.getElementById('g-iv').textContent = avgIV.toFixed(1) + '%';
+
+  // ── Update header ──
+
+  document.getElementById('hdr-spot-val').textContent = spot.toLocaleString('en-IN');
+  document.getElementById('hdr-dte').textContent = 'DTE ' + dte;
+
+  // Detect strategy name
+  const names = { 4: detectStrategy() };
+  document.getElementById('hdr-strategy').textContent = detectStrategy();
+
+  // ── Render legs table ──
+  renderLegsTable(ivs, currentPrices, legPnls);
+
+  // ── Render chart ──
+  buildChart(spots, expiryPnL, todayPnL, spot, mtm);
+}
+
+function detectStrategy() {
+  const sells = legs.filter(l => l.side === 'SELL').length;
+  const buys  = legs.filter(l => l.side === 'BUY').length;
+  const ces   = legs.filter(l => l.type === 'CE').length;
+  const pes   = legs.filter(l => l.type === 'PE').length;
+  const n = legs.length;
+  if (n === 4 && sells === 2 && buys === 2 && ces === 2 && pes === 2) {
+    const sellStrikes = legs.filter(l=>l.side==='SELL').map(l=>l.strike);
+    return sellStrikes[0] === sellStrikes[1] ? 'Iron Fly' : 'Iron Condor';
+  }
+  if (n === 2 && sells === 2) return ces === 1 && pes === 1 ? 'Short Straddle' : 'Short Strangle';
+  if (n === 2 && buys  === 2) return ces === 1 && pes === 1 ? 'Long Straddle'  : 'Long Strangle';
+  if (n === 1 && sells === 1 && ces === 1) return 'Short Call';
+  if (n === 1 && sells === 1 && pes === 1) return 'Short Put';
+  if (n === 1 && buys  === 1 && ces === 1) return 'Long Call';
+  if (n === 1 && buys  === 1 && pes === 1) return 'Long Put';
+  if (n === 2 && ces === 2) return buys > sells ? 'Bull Call Spread' : 'Bear Call Spread';
+  if (n === 2 && pes === 2) return buys > sells ? 'Bear Put Spread'  : 'Bull Put Spread';
+  return 'Custom';
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+
+function updateClock() {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2,'0');
+  const m = String(now.getMinutes()).padStart(2,'0');
+  const s = String(now.getSeconds()).padStart(2,'0');
+  document.getElementById('hdr-time').textContent = `${h}:${m}:${s}`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Register annotation plugin
+Chart.register(window['chartjs-plugin-annotation']);
+
+// Initial render
+recalc();
+</script>
+</body>
+</html>

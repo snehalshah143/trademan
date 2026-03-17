@@ -1,4 +1,7 @@
+import { useMemo } from 'react'
 import { Layers } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import axios from 'axios'
 import { useLTPStore } from '@store/ltpStore'
 import { useQuote, spotExchangeFor } from '@hooks/useQuote'
 import { getStaticInstrument } from '@/data/instruments'
@@ -7,10 +10,14 @@ import { PrebuiltStrategyCard } from './PrebuiltStrategyCard'
 import type { StrategyLeg, Exchange, InstrumentType, OrderSide } from '@/types/domain'
 import type { MiniPayoffStrategy } from '@/components/charts/MiniPayoffSVG'
 
+interface ChainRow { strike: number; callLTP: number; putLTP: number }
+interface ChainResp { rows: ChainRow[]; atm_strike: number | null }
+
 interface PrebuiltStrategiesPanelProps {
   underlying: string
   lotSize: number
   expiry: string
+  selectedExpiry?: string | null
   onLoadPreset: (legs: StrategyLeg[]) => void
   onBuildOptionChain: () => void
   onBuildLegEditor: () => void
@@ -72,6 +79,7 @@ const PREBUILT_CARDS: Array<{ name: string; key: MiniPayoffStrategy }> = [
 export function PrebuiltStrategiesPanel({
   underlying,
   expiry,
+  selectedExpiry,
   onLoadPreset,
   onBuildOptionChain,
   onBuildLegEditor,
@@ -84,54 +92,90 @@ export function PrebuiltStrategiesPanel({
   const interval = inst?.strikeInterval ?? 50
 
   // Spot price: quote API is authoritative (covers stocks via NSE exchange)
-  // Fall back to WS ltpMap for indices that are already subscribed
   const { data: quoteData } = useQuote(underlying, spotExchangeFor(underlying))
   const spot = quoteData?.ltp ?? ltpMap[underlying]?.tick.ltp ?? 0
   const atm  = spot > 0 ? getATM(spot, interval) : 0
 
-  const getLTP = (sym: string) => ltpMap[sym]?.tick.ltp ?? 0
+  // Fetch expiries independently — needed when user hasn't clicked any expiry tab yet
+  const { data: expiriesData } = useQuery<{ expiries: string[] }>({
+    queryKey: ['expiries', underlying, 'NFO'],
+    queryFn: () =>
+      axios
+        .get<{ expiries: string[] }>(`/api/instruments/expiries?symbol=${underlying}&exchange=NFO`)
+        .then((r) => r.data),
+    staleTime: 60_000,
+  })
+
+  // Resolve expiry: prefer selectedExpiry (from option chain tab) → leg expiry → first from API
+  const chainExpiry = selectedExpiry || expiry || expiriesData?.expiries?.[0] || ''
+
+  // Fetch option chain to get real LTPs per strike
+  const { data: chainData } = useQuery<ChainResp>({
+    queryKey: ['optionchain', underlying, 'NFO', chainExpiry, 50],
+    queryFn: () =>
+      axios
+        .get<ChainResp>(`/api/instruments/optionchain?symbol=${underlying}&exchange=NFO&expiry=${chainExpiry}&strike_count=50`)
+        .then((r) => r.data),
+    staleTime: 5_000,
+    enabled: !!chainExpiry,
+  })
+
+  const chainRows = useMemo(() => chainData?.rows ?? [], [chainData])
+
+  // Prefer chain's own atm_strike; fall back to local calculation
+  const chainAtm = chainData?.atm_strike ?? 0
+  const effectiveAtm = chainAtm > 0 ? chainAtm : atm
+
+  function getChainLTP(strike: number, type: 'CE' | 'PE'): number {
+    const row = chainRows.find((r) => r.strike === strike)
+    if (!row) return 0
+    return type === 'CE' ? (row.callLTP ?? 0) : (row.putLTP ?? 0)
+  }
 
   function buildLegs(key: MiniPayoffStrategy): StrategyLeg[] {
-    if (atm === 0) return []   // no spot price yet — don't build with wrong strikes
+    if (effectiveAtm === 0) return []
+    if (!chainExpiry) return []   // no expiry yet — wait for API
 
+    const A = effectiveAtm
     const L = (strike: number, type: InstrumentType, side: OrderSide): StrategyLeg => {
-      const exShort = expiry ? expiry.replace(/-/g, '').slice(2) : ''
-      const sym = type === 'FUT' ? `${underlying}FUT` : `${underlying}${exShort}${strike}${type}`
-      return makeLeg(underlying, expiry, strike, type, side, 1, lotSize, getLTP(sym))
+      const ltp = (type === 'CE' || type === 'PE') ? getChainLTP(strike, type) : 0
+      return makeLeg(underlying, chainExpiry, strike, type, side, 1, lotSize, ltp)
     }
 
     switch (key) {
       case 'straddle':
-        return [L(atm, 'CE', 'SELL'), L(atm, 'PE', 'SELL')]
+        return [L(A, 'CE', 'SELL'), L(A, 'PE', 'SELL')]
       case 'strangle':
-        return [L(atm + 2 * interval, 'CE', 'SELL'), L(atm - 2 * interval, 'PE', 'SELL')]
+        return [L(A + 2 * interval, 'CE', 'SELL'), L(A - 2 * interval, 'PE', 'SELL')]
       case 'bullcall':
-        return [L(atm, 'CE', 'BUY'), L(atm + 2 * interval, 'CE', 'SELL')]
+        return [L(A, 'CE', 'BUY'), L(A + 2 * interval, 'CE', 'SELL')]
       case 'bearput':
-        return [L(atm, 'PE', 'BUY'), L(atm - 2 * interval, 'PE', 'SELL')]
+        return [L(A, 'PE', 'BUY'), L(A - 2 * interval, 'PE', 'SELL')]
       case 'ironfly':
         return [
-          L(atm, 'CE', 'SELL'), L(atm, 'PE', 'SELL'),
-          L(atm + 2 * interval, 'CE', 'BUY'), L(atm - 2 * interval, 'PE', 'BUY'),
+          L(A, 'CE', 'SELL'), L(A, 'PE', 'SELL'),
+          L(A + 2 * interval, 'CE', 'BUY'), L(A - 2 * interval, 'PE', 'BUY'),
         ]
       case 'ironcondor':
         return [
-          L(atm + 2 * interval, 'CE', 'SELL'), L(atm - 2 * interval, 'PE', 'SELL'),
-          L(atm + 4 * interval, 'CE', 'BUY'), L(atm - 4 * interval, 'PE', 'BUY'),
+          L(A + 2 * interval, 'CE', 'SELL'), L(A - 2 * interval, 'PE', 'SELL'),
+          L(A + 4 * interval, 'CE', 'BUY'), L(A - 4 * interval, 'PE', 'BUY'),
         ]
       case 'coveredcall': {
-        const futSym = `${underlying}FUT`
+        const futLtp = ltpMap[`${underlying}FUT`]?.tick.ltp ?? 0
         return [
-          makeLeg(underlying, expiry, 0, 'FUT', 'BUY', 1, lotSize, getLTP(futSym)),
-          L(atm + 2 * interval, 'CE', 'SELL'),
+          makeLeg(underlying, chainExpiry, 0, 'FUT', 'BUY', 1, lotSize, futLtp),
+          L(A + 2 * interval, 'CE', 'SELL'),
         ]
       }
       case 'longcall':
-        return [L(atm, 'CE', 'BUY')]
+        return [L(A, 'CE', 'BUY')]
       default:
         return []
     }
   }
+
+  const notReady = effectiveAtm === 0 || !chainExpiry
 
   return (
     <div className="flex flex-col items-center py-6 px-4 gap-5">
@@ -148,9 +192,9 @@ export function PrebuiltStrategiesPanel({
       <div className="w-full">
         <div className="text-xs text-text-muted font-medium mb-3 uppercase tracking-wide">
           Prebuilt Strategies
-          {spot > 0 && (
+          {effectiveAtm > 0 && chainExpiry && (
             <span className="ml-2 text-text-secondary normal-case font-normal">
-              ATM {atm} · Lot {lotSize}
+              ATM {effectiveAtm} · Lot {lotSize}
             </span>
           )}
         </div>
@@ -160,6 +204,7 @@ export function PrebuiltStrategiesPanel({
               key={key}
               name={name}
               strategy={key}
+              disabled={notReady}
               onClick={() => {
                 const legs = buildLegs(key).map((l, i) => ({ ...l, legIndex: i }))
                 if (legs.length > 0) onLoadPreset(legs)
@@ -167,8 +212,10 @@ export function PrebuiltStrategiesPanel({
             />
           ))}
         </div>
-        {spot === 0 && (
-          <p className="text-xs text-text-muted mt-2 text-center">Loading spot price…</p>
+        {notReady && (
+          <p className="text-xs text-text-muted mt-2 text-center">
+            {spot === 0 ? 'Loading spot price…' : 'Loading expiry data…'}
+          </p>
         )}
       </div>
 

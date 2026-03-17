@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { TrendingUp } from 'lucide-react'
 import { usePayoff } from '@hooks/usePayoff'
 import { useGreeks } from '@hooks/useGreeks'
 import { useLTPStore } from '@store/ltpStore'
 import { PayoffChart } from '@/components/charts/PayoffChart'
 import { MetricCard } from '@/components/ui/MetricCard'
-import { computePOP, computeMarginApprox, computeRiskReward } from '@/lib/payoff'
+import { computePOP, computeMarginApprox, computeRiskReward, computeTodaysCurve } from '@/lib/payoff'
 import { fmtINRCompact, fmtPrice, profitLossClass, cn } from '@/lib/utils'
 import type { Strategy } from '@/types/domain'
 
@@ -26,6 +26,32 @@ export function PayoffPanel({ strategy, currentSpot: externalSpot }: PayoffPanel
 
   const payoffData = usePayoff(strategy, underlyingLTP)
   const { greeks, loading: greeksLoading } = useGreeks(strategy?.legs ?? [])
+
+  // Days to expiry — from first option leg with an expiry date
+  const daysToExpiry = useMemo(() => {
+    if (!strategy) return 0
+    const expiry = strategy.legs.find((l) => l.instrument.expiry)?.instrument.expiry
+    if (!expiry) return 0
+    const exp = new Date(expiry)
+    const now = new Date()
+    now.setHours(0, 0, 0, 0)
+    return Math.max(0, Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+  }, [strategy])
+
+  // Numeric LTP map for today's curve calculation (WS ltp, else entry price)
+  const numericLtpMap = useMemo(() => {
+    if (!strategy) return {}
+    return strategy.legs.reduce<Record<string, number>>((acc, leg) => {
+      acc[leg.instrument.symbol] = ltpMap[leg.instrument.symbol]?.tick.ltp ?? leg.entryPrice ?? 0
+      return acc
+    }, {})
+  }, [strategy, ltpMap])
+
+  // Today's P&L curve — time-value approximation (distinct from expiry intrinsic curve)
+  const todayCurve = useMemo(() => {
+    if (!strategy || !payoffData || payoffData.points.length === 0) return undefined
+    return computeTodaysCurve(strategy, underlyingLTP, numericLtpMap, daysToExpiry)
+  }, [strategy, underlyingLTP, numericLtpMap, daysToExpiry, payoffData])
 
   const hasLegs = (strategy?.legs.length ?? 0) > 0
 
@@ -162,7 +188,7 @@ export function PayoffPanel({ strategy, currentSpot: externalSpot }: PayoffPanel
               <div className="relative">
                 {payoffData ? (
                   <>
-                    <PayoffChart payoffData={payoffData} height={280} showTodayCurve />
+                    <PayoffChart payoffData={payoffData} todayCurve={todayCurve} height={280} />
                     {/* Chart legend */}
                     <div className="flex items-center gap-4 mt-1 px-1">
                       <div className="flex items-center gap-1.5 text-[10px] text-text-muted">

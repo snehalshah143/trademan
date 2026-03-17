@@ -30,11 +30,20 @@ function optionIntrinsic(
 
 // ─── Leg P&L at a given spot ─────────────────────────────────────────────────
 
-function legPnlAtSpot(leg: StrategyLeg, spot: number, useEntryPrice: boolean): number {
+function legPnlAtSpot(
+  leg: StrategyLeg,
+  spot: number,
+  useEntryPrice: boolean,
+  ltpMap: Record<string, number> = {},
+): number {
   const intrinsic = optionIntrinsic(leg, spot)
-  const refPrice = useEntryPrice ? (leg.entryPrice ?? leg.currentLTP ?? 0) : (leg.currentLTP ?? leg.entryPrice ?? 0)
+  const sym = leg.instrument.symbol
+  // Use entry price if available; fall back to live LTP from map, then currentLTP, then 0
+  const mapLtp = ltpMap[sym] ?? 0
+  const refPrice = useEntryPrice
+    ? (leg.entryPrice ?? mapLtp ?? leg.currentLTP ?? 0)
+    : (mapLtp ?? leg.currentLTP ?? leg.entryPrice ?? 0)
   const sideMult = leg.side === 'BUY' ? 1 : -1
-  // P&L = side × (intrinsic - refPrice) × quantity
   return sideMult * (intrinsic - refPrice) * leg.quantity
 }
 
@@ -65,11 +74,15 @@ export function computePayoff(
   ltpMap: Record<string, number>,
   points = 120
 ): PayoffData {
-  const legs = strategy.legs.filter(
-    (l) => l.status !== 'ERROR' && l.entryPrice !== undefined
+  // Include all non-error legs; legs without entryPrice use ltpMap or 0 as reference
+  const legs = strategy.legs.filter((l) => l.status !== 'ERROR')
+
+  // Only skip if there truly is no data at all (no strikes)
+  const hasUsableLegs = legs.some(
+    (l) => l.instrument.strike != null || l.instrument.instrumentType === 'FUT'
   )
 
-  if (legs.length === 0) {
+  if (legs.length === 0 || !hasUsableLegs) {
     return {
       points: [],
       breakevens: [],
@@ -90,12 +103,8 @@ export function computePayoff(
 
   for (let i = 0; i < points; i++) {
     const spot = spotMin + step * i
-    const theoreticalPnl = legs.reduce((sum, leg) => sum + legPnlAtSpot(leg, spot, true), 0)
-    const livePnl = legs.reduce((sum, leg) => {
-      const ltp = ltpMap[leg.instrument.symbol] ?? leg.currentLTP ?? leg.entryPrice ?? 0
-      const legWithLive = { ...leg, currentLTP: ltp }
-      return sum + legPnlAtSpot(legWithLive, spot, false)
-    }, 0)
+    const theoreticalPnl = legs.reduce((sum, leg) => sum + legPnlAtSpot(leg, spot, true, ltpMap), 0)
+    const livePnl = legs.reduce((sum, leg) => sum + legPnlAtSpot(leg, spot, false, ltpMap), 0)
     payoffPoints.push({ spot: parseFloat(spot.toFixed(2)), theoreticalPnl, livePnl })
   }
 

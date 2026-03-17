@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -8,57 +9,69 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  CartesianGrid,
 } from 'recharts'
 import type { PayoffData } from '@/types/domain'
 import { fmtPrice, fmtINRCompact } from '@/lib/utils'
 
+export interface TodayPoint { spot: number; pnl: number }
+
 interface PayoffChartProps {
   payoffData: PayoffData
+  todayCurve?: TodayPoint[]
   height?: number
-  showTodayCurve?: boolean
 }
 
-function formatYAxis(v: number) {
-  if (Math.abs(v) >= 1000) return `${v > 0 ? '+' : ''}${fmtINRCompact(v)}`
+function fmtY(v: number) {
+  const abs = Math.abs(v)
+  if (abs >= 100000) return `${v > 0 ? '+' : ''}${(v / 100000).toFixed(1)}L`
+  if (abs >= 1000) return `${v > 0 ? '+' : ''}${(v / 1000).toFixed(0)}K`
   return `${v > 0 ? '+' : ''}${v.toFixed(0)}`
 }
 
-interface CustomTooltipProps {
+interface TooltipProps {
   active?: boolean
   payload?: Array<{ name: string; value: number; color: string }>
   label?: number
   currentSpot: number
 }
 
-function CustomTooltip({ active, payload, label, currentSpot }: CustomTooltipProps) {
+function CustomTooltip({ active, payload, label, currentSpot }: TooltipProps) {
   if (!active || !payload?.length || label === undefined) return null
-
   const change = ((label - currentSpot) / currentSpot) * 100
-  const changeStr = `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`
-
-  const today = payload.find((p) => p.name === 'livePnl')
+  const today = payload.find((p) => p.name === 'todayPnl')
   const expiry = payload.find((p) => p.name === 'theoreticalPnl')
-
   return (
-    <div className="bg-[#1e293b] border border-[#334155] rounded-md shadow-lg px-3 py-2 text-xs">
-      <div className="text-[#94a3b8] mb-1.5 font-medium">
-        When price is at {fmtPrice(label, 0)} ({changeStr})
+    <div
+      style={{
+        background: '#18181c',
+        border: '1px solid #2a2a36',
+        borderRadius: 6,
+        padding: '8px 12px',
+        fontSize: 11,
+        lineHeight: '1.6',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+      }}
+    >
+      <div style={{ color: '#5a5a72', fontWeight: 600, marginBottom: 4 }}>
+        {fmtPrice(label, 0)}&nbsp;
+        <span style={{ color: change >= 0 ? '#22c55e' : '#ef4444', fontWeight: 400 }}>
+          ({change >= 0 ? '+' : ''}{change.toFixed(1)}%)
+        </span>
       </div>
       {today && (
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-0.5 bg-[#3b82f6]" />
-          <span className="text-[#94a3b8]">Today</span>
-          <span className={`ml-auto font-mono font-medium ${today.value >= 0 ? 'text-[#22c55e]' : 'text-[#ef4444]'}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 12, height: 2, background: '#3b82f6', borderRadius: 1 }} />
+          <span style={{ color: '#9898b0' }}>Today</span>
+          <span style={{ marginLeft: 'auto', fontFamily: 'monospace', fontWeight: 600, color: today.value >= 0 ? '#22c55e' : '#ef4444' }}>
             {today.value >= 0 ? '+' : ''}{fmtINRCompact(today.value)}
           </span>
         </div>
       )}
       {expiry && (
-        <div className="flex items-center gap-2 mt-0.5">
-          <div className="w-3 h-0.5 bg-[#22c55e]" />
-          <span className="text-[#94a3b8]">Expiry</span>
-          <span className={`ml-auto font-mono font-medium ${expiry.value >= 0 ? 'text-[#22c55e]' : 'text-[#8b5cf6]'}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+          <div style={{ width: 12, height: 2, background: '#22c55e', borderRadius: 1 }} />
+          <span style={{ color: '#9898b0' }}>Expiry</span>
+          <span style={{ marginLeft: 'auto', fontFamily: 'monospace', fontWeight: 600, color: expiry.value >= 0 ? '#22c55e' : '#ef4444' }}>
             {expiry.value >= 0 ? '+' : ''}{fmtINRCompact(expiry.value)}
           </span>
         </div>
@@ -67,144 +80,160 @@ function CustomTooltip({ active, payload, label, currentSpot }: CustomTooltipPro
   )
 }
 
-// Augment points with clamped values for split-color fills
-function augmentPoints(points: PayoffData['points']) {
-  return points.map((p) => ({
-    ...p,
-    expiryPos: Math.max(0, p.theoreticalPnl),
-    expiryNeg: Math.min(0, p.theoreticalPnl),
-  }))
-}
-
-export function PayoffChart({ payoffData, height = 240, showTodayCurve = true }: PayoffChartProps) {
+export function PayoffChart({ payoffData, todayCurve, height = 240 }: PayoffChartProps) {
   const { points, breakevens, currentSpot, currentMTM } = payoffData
+
+  const data = useMemo(() => {
+    return points.map((p, i) => ({
+      ...p,
+      expiryPos: Math.max(0, p.theoreticalPnl),
+      expiryNeg: Math.min(0, p.theoreticalPnl),
+      todayPnl: todayCurve?.[i]?.pnl ?? p.livePnl,
+    }))
+  }, [points, todayCurve])
 
   if (points.length === 0) {
     return (
-      <div className="flex items-center justify-center text-text-muted text-xs" style={{ height }}>
+      <div
+        style={{
+          height,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#5a5a72',
+          fontSize: 12,
+        }}
+      >
         Add legs with entry prices to see payoff
       </div>
     )
   }
 
-  const data = augmentPoints(points)
-
-  // Find closest point to current spot for the MTM dot
-  const closestPoint = points.reduce((best, p) =>
-    Math.abs(p.spot - currentSpot) < Math.abs(best.spot - currentSpot) ? p : best
-  , points[0])
-
-  const spotLabel = `MTM: ${currentMTM >= 0 ? '+' : ''}${fmtINRCompact(currentMTM)}  |  Spot: ${fmtPrice(currentSpot, 0)}`
+  const closestIdx = points.reduce((bestIdx, p, i) =>
+    Math.abs(p.spot - currentSpot) < Math.abs(points[bestIdx].spot - currentSpot) ? i : bestIdx
+  , 0)
+  const closestSpot = points[closestIdx].spot
+  // MTM dot Y position: use today curve if available, else theoretical at that point
+  const dotY = todayCurve?.[closestIdx]?.pnl ?? currentMTM
 
   return (
-    <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1e1e28" />
+    <div
+      style={{
+        height,
+        background: '#0a0a0b',
+        borderRadius: 8,
+        border: '1px solid #1e1e28',
+        overflow: 'hidden',
+      }}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={data} margin={{ top: 14, right: 14, left: -4, bottom: 4 }}>
 
-        <XAxis
-          dataKey="spot"
-          tickFormatter={(v) => fmtPrice(v, 0)}
-          tick={{ fill: '#5a5a72', fontSize: 10 }}
-          axisLine={{ stroke: '#2a2a36' }}
-          tickLine={false}
-          interval="preserveStartEnd"
-        />
-        <YAxis
-          tickFormatter={formatYAxis}
-          tick={{ fill: '#5a5a72', fontSize: 10 }}
-          axisLine={false}
-          tickLine={false}
-          width={56}
-        />
+          <XAxis
+            dataKey="spot"
+            tickFormatter={(v) => fmtPrice(v, 0)}
+            tick={{ fill: '#5a5a72', fontSize: 10 }}
+            axisLine={{ stroke: '#1e1e28' }}
+            tickLine={false}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            tickFormatter={fmtY}
+            tick={{ fill: '#5a5a72', fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            width={50}
+          />
 
-        <Tooltip
-          content={<CustomTooltip currentSpot={currentSpot} />}
-          cursor={{ stroke: '#3b82f6', strokeWidth: 1, strokeDasharray: '3 3' }}
-        />
+          <Tooltip
+            content={<CustomTooltip currentSpot={currentSpot} />}
+            cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '3 3' }}
+          />
 
-        {/* Expiry curve fills — green above zero, red below */}
-        <Area
-          type="monotone"
-          dataKey="expiryPos"
-          stroke="none"
-          fill="rgba(34,197,94,0.10)"
-          isAnimationActive={false}
-          legendType="none"
-        />
-        <Area
-          type="monotone"
-          dataKey="expiryNeg"
-          stroke="none"
-          fill="rgba(239,68,68,0.10)"
-          isAnimationActive={false}
-          legendType="none"
-        />
+          {/* Profit zone — green fill above zero */}
+          <Area
+            type="monotone"
+            dataKey="expiryPos"
+            stroke="none"
+            fill="rgba(34,197,94,0.15)"
+            isAnimationActive={false}
+            legendType="none"
+          />
+          {/* Loss zone — red fill below zero */}
+          <Area
+            type="monotone"
+            dataKey="expiryNeg"
+            stroke="none"
+            fill="rgba(239,68,68,0.15)"
+            isAnimationActive={false}
+            legendType="none"
+          />
 
-        {/* Today curve (blue solid) */}
-        {showTodayCurve && (
+          {/* Today's P&L — blue dashed curve (time value approx) */}
           <Line
             type="monotone"
-            dataKey="livePnl"
+            dataKey="todayPnl"
             stroke="#3b82f6"
             strokeWidth={2}
+            strokeDasharray="6 3"
             dot={false}
             activeDot={{ r: 3, fill: '#3b82f6' }}
             isAnimationActive={false}
           />
-        )}
 
-        {/* Expiry curve (green/purple, dashed when today curve shown) */}
-        <Line
-          type="monotone"
-          dataKey="theoreticalPnl"
-          stroke="#22c55e"
-          strokeWidth={showTodayCurve ? 1.5 : 2}
-          strokeDasharray={showTodayCurve ? '5 3' : undefined}
-          dot={false}
-          activeDot={{ r: 3, fill: '#22c55e' }}
-          isAnimationActive={false}
-        />
-
-        {/* Zero line */}
-        <ReferenceLine y={0} stroke="#3a3a4a" strokeWidth={1} />
-
-        {/* Current spot line with MTM label */}
-        <ReferenceLine
-          x={currentSpot}
-          stroke="#f59e0b"
-          strokeDasharray="4 3"
-          strokeWidth={1.5}
-          label={{
-            value: spotLabel,
-            position: 'insideTopRight',
-            fill: '#f59e0b',
-            fontSize: 9,
-            offset: 4,
-          }}
-        />
-
-        {/* Breakevens */}
-        {breakevens.map((be, i) => (
-          <ReferenceLine
-            key={i}
-            x={be}
-            stroke="#ef4444"
-            strokeDasharray="3 3"
-            strokeWidth={1}
-            label={{ value: 'BE', position: 'top', fill: '#ef4444', fontSize: 9 }}
+          {/* At Expiry — solid green line */}
+          <Line
+            type="monotone"
+            dataKey="theoreticalPnl"
+            stroke="#22c55e"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 3, fill: '#22c55e' }}
+            isAnimationActive={false}
           />
-        ))}
 
-        {/* MTM dot on today curve */}
-        <ReferenceDot
-          x={closestPoint.spot}
-          y={currentMTM}
-          r={4}
-          fill="#22c55e"
-          stroke="#111113"
-          strokeWidth={1.5}
-        />
-      </ComposedChart>
-    </ResponsiveContainer>
+          {/* Zero line */}
+          <ReferenceLine y={0} stroke="#2a2a36" strokeWidth={1} />
+
+          {/* Current spot — amber vertical */}
+          <ReferenceLine
+            x={currentSpot}
+            stroke="#f59e0b"
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+            label={{
+              value: fmtPrice(currentSpot, 0),
+              position: 'insideTopRight',
+              fill: '#f59e0b',
+              fontSize: 9,
+              offset: 4,
+            }}
+          />
+
+          {/* Breakeven lines */}
+          {breakevens.map((be, i) => (
+            <ReferenceLine
+              key={i}
+              x={be}
+              stroke="#ef4444"
+              strokeDasharray="3 3"
+              strokeWidth={1}
+              label={{ value: 'BE', position: 'top', fill: '#ef4444', fontSize: 9 }}
+            />
+          ))}
+
+          {/* MTM dot at current spot */}
+          <ReferenceDot
+            x={closestSpot}
+            y={dotY}
+            r={4}
+            fill="#22c55e"
+            stroke="#0a0a0b"
+            strokeWidth={1.5}
+          />
+
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
   )
 }

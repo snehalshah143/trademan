@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
+import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
 import { Play, BellPlus } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useStrategyStore } from '@store/strategyStore'
 import { useLTPStore } from '@store/ltpStore'
+import { useQuote, spotExchangeFor } from '@hooks/useQuote'
 import { INSTRUMENTS } from './InstrumentSelector'
 import { getStaticInstrument } from '@/data/instruments'
 import { InstrumentHeader } from './PositionsTab'
@@ -105,22 +107,50 @@ export function StrategyBuilder() {
     }
   }, [underlying, selectedExpiry, queryClient])
 
-  // Build strategy for payoff (only enabled legs)
+  // Spot price — WS first, then quote API (covers stocks not in WS stream)
+  const { data: spotQuote } = useQuote(underlying, spotExchangeFor(underlying))
+  const wsSpot = useLTPStore((s) => s.getLTP(underlying))
+  const currentSpot = wsSpot ?? spotQuote?.ltp ?? niftyLTP
+
+  // Option chain for payoff enrichment — reactive, so strategyForPayoff updates when data loads
+  const payoffExpiry = selectedExpiry ?? expiry
+  const { data: payoffChain } = useQuery<{ rows: { strike: number; callLTP: number; putLTP: number }[] }>({
+    queryKey: ['optionchain', underlying, 'NFO', payoffExpiry, 50],
+    queryFn: () =>
+      axios
+        .get(`/api/instruments/optionchain?symbol=${underlying}&exchange=NFO&expiry=${payoffExpiry}&strike_count=50`)
+        .then((r) => r.data),
+    staleTime: 5_000,
+    enabled: !!payoffExpiry,
+  })
+
+  // Build strategy for payoff — enrich legs with chain LTPs when entryPrice is missing
   const strategyForPayoff: Strategy | null = useMemo(() => {
     if (!draftStrategy) return null
     const enabledLegsList = legs.filter((l) => enabledLegs.has(l.id))
+    const chainRows = payoffChain?.rows ?? []
+
+    const enrichedLegs = enabledLegsList.map((leg) => {
+      if (leg.entryPrice != null && leg.entryPrice > 0) return leg
+      const { instrumentType, strike } = leg.instrument
+      if ((instrumentType !== 'CE' && instrumentType !== 'PE') || strike == null) return leg
+      const row = chainRows.find((r) => r.strike === strike)
+      if (!row) return leg
+      const chainLtp = instrumentType === 'CE' ? row.callLTP : row.putLTP
+      if (!chainLtp || chainLtp <= 0) return leg
+      return { ...leg, entryPrice: chainLtp }
+    })
+
     return {
       id: 'draft',
       name: draftStrategy.name,
       underlyingSymbol: underlying,
-      legs: enabledLegsList,
+      legs: enrichedLegs,
       status: 'DRAFT',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-  }, [draftStrategy, legs, enabledLegs, underlying])
-
-  const currentSpot = useLTPStore((s) => s.getLTP(underlying)) ?? niftyLTP
+  }, [draftStrategy, legs, enabledLegs, underlying, payoffChain])
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
@@ -177,6 +207,22 @@ export function StrategyBuilder() {
       legs: legs.map((l) => l.id === id ? { ...l, entryPrice: price } : l)
     })
   }, [legs, updateDraft])
+
+  const handleEditExpiry = useCallback((id: string, newExpiry: string) => {
+    updateDraft({
+      legs: legs.map((l) => {
+        if (l.id !== id) return l
+        const exShort = newExpiry.replace(/-/g, '').slice(2)
+        const sym = l.instrument.instrumentType === 'FUT'
+          ? `${underlying}FUT`
+          : `${underlying}${exShort}${l.instrument.strike}${l.instrument.instrumentType}`
+        return {
+          ...l,
+          instrument: { ...l.instrument, symbol: sym, expiry: newExpiry },
+        }
+      }),
+    })
+  }, [legs, underlying, updateDraft])
 
   const handleLoadPreset = useCallback((presetLegs: StrategyLeg[]) => {
     if (!draftStrategy) return
@@ -300,6 +346,7 @@ export function StrategyBuilder() {
                 legs={legs}
                 enabledLegs={enabledLegs}
                 expiry={expiry}
+                selectedExpiry={selectedExpiry}
                 addFormSide={addFormSide}
                 selectedFutExpiry={selectedFutExpiry}
                 onAddLeg={handleAddLeg}
@@ -309,6 +356,7 @@ export function StrategyBuilder() {
                 onToggleSide={handleToggleSide}
                 onRemoveLeg={handleRemoveLeg}
                 onEditEntryPrice={handleEditEntryPrice}
+                onEditExpiry={handleEditExpiry}
                 onLoadPreset={handleLoadPreset}
                 onSwitchToOptionChain={() => setActiveTab('optionchain')}
                 onSwitchToLegEditor={() => setActiveTab('legeditor')}

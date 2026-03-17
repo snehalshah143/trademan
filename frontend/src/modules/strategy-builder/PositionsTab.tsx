@@ -13,6 +13,9 @@ import { PrebuiltStrategiesPanel } from './PrebuiltStrategiesPanel'
 import { FuturesSelector } from './FuturesSelector'
 import type { StrategyLeg, Exchange, InstrumentType, ProductType } from '@/types/domain'
 
+interface ChainRow { strike: number; callLTP: number; putLTP: number }
+interface ChainResp { rows: ChainRow[] }
+
 const STRIKE_INTERVALS: Record<string, number> = {
   NIFTY: 50, BANKNIFTY: 100, FINNIFTY: 50, SENSEX: 100, MIDCPNIFTY: 50,
 }
@@ -441,30 +444,72 @@ function AddLegForm({ side, underlying, lotSize, defaultExpiry, onAdd, onCancel 
 interface LegTableRowProps {
   leg: StrategyLeg
   index: number
+  underlying: string
   onRemove: (id: string) => void
   onEditLots: (id: string, lots: number) => void
   onEditEntryPrice: (id: string, price: number) => void
+  onEditExpiry: (id: string, expiry: string) => void
 }
 
-function LegTableRow({ leg, index, onRemove, onEditLots, onEditEntryPrice }: LegTableRowProps) {
+function LegTableRow({ leg, index, underlying, onRemove, onEditLots, onEditEntryPrice, onEditExpiry }: LegTableRowProps) {
   const ltpEntry = useLTPStore((s) => s.ltpMap[leg.instrument.symbol])
   const wsLtp    = ltpEntry?.tick.ltp
 
-  // Fall back to quote API for symbols not in WS stream (options, stock legs, etc.)
+  const isOption = leg.instrument.instrumentType === 'CE' || leg.instrument.instrumentType === 'PE'
+
+  // Always fetch expiries for options: needed for the inline expiry dropdown + missing expiry fallback
+  const { data: expiriesData } = useQuery<{ expiries: string[] }>({
+    queryKey: ['expiries', underlying, 'NFO'],
+    queryFn: () =>
+      axios
+        .get<{ expiries: string[] }>(`/api/instruments/expiries?symbol=${underlying}&exchange=NFO`)
+        .then((r) => r.data),
+    staleTime: 60_000,
+    enabled: isOption,
+  })
+
+  const availableExpiries = expiriesData?.expiries ?? []
+  const effectiveExpiry = leg.instrument.expiry || availableExpiries[0]
+
+  // For option legs: always fetch from option chain (WS never streams option symbols)
+  const { data: chainData } = useQuery<ChainResp>({
+    queryKey: ['optionchain', underlying, 'NFO', effectiveExpiry, 50],
+    queryFn: () =>
+      axios
+        .get<ChainResp>(`/api/instruments/optionchain?symbol=${underlying}&exchange=NFO&expiry=${effectiveExpiry}&strike_count=50`)
+        .then((r) => r.data),
+    staleTime: 3_000,
+    refetchInterval: 5_000,
+    enabled: isOption && !!effectiveExpiry,
+  })
+
+  const chainLtp = useMemo(() => {
+    if (!chainData?.rows || leg.instrument.strike == null) return undefined
+    const row = chainData.rows.find((r) => r.strike === leg.instrument.strike)
+    if (!row) return undefined
+    return leg.instrument.instrumentType === 'CE' ? row.callLTP : row.putLTP
+  }, [chainData, leg.instrument.strike, leg.instrument.instrumentType])
+
+  // For FUT legs: fall back to quote API
   const { data: quoteData } = useQuote(
     leg.instrument.symbol,
     leg.instrument.exchange ?? 'NFO',
-    wsLtp == null,  // only poll when WS has no data
+    !isOption && wsLtp == null,
   )
 
-  const ltp       = wsLtp ?? quoteData?.ltp ?? leg.currentLTP ?? leg.entryPrice ?? 0
+  // Option legs: chain is authoritative (WS has no option data)
+  // FUT/stock legs: WS is authoritative, fall back to quote API
+  const ltp = isOption
+    ? (chainLtp ?? leg.entryPrice ?? 0)
+    : (wsLtp ?? quoteData?.ltp ?? leg.currentLTP ?? leg.entryPrice ?? 0)
   const direction = ltpEntry?.direction ?? 'flat'
   const flashKey  = ltpEntry?.flashKey ?? 0
 
-  const [editingEntry, setEditingEntry] = useState(false)
-  const [entryInput, setEntryInput]     = useState('')
-  const [editingLots, setEditingLots]   = useState(false)
-  const [lotsInput, setLotsInput]       = useState('')
+  const [editingExpiry, setEditingExpiry] = useState(false)
+  const [editingEntry, setEditingEntry]   = useState(false)
+  const [entryInput, setEntryInput]       = useState('')
+  const [editingLots, setEditingLots]     = useState(false)
+  const [lotsInput, setLotsInput]         = useState('')
 
   const entryPrice = leg.entryPrice ?? 0
   const sideMult   = leg.side === 'BUY' ? 1 : -1
@@ -503,9 +548,35 @@ function LegTableRow({ leg, index, onRemove, onEditLots, onEditEntryPrice }: Leg
         {instrumentLabel}
       </td>
 
-      {/* Expiry */}
+      {/* Expiry — click to change */}
       <td className="px-2 py-2 text-left text-text-muted whitespace-nowrap">
-        {fmtExpiryShort(leg.instrument.expiry)}
+        {isOption && editingExpiry ? (
+          <select
+            autoFocus
+            value={effectiveExpiry ?? ''}
+            onChange={(e) => {
+              if (e.target.value) onEditExpiry(leg.id, e.target.value)
+              setEditingExpiry(false)
+            }}
+            onBlur={() => setEditingExpiry(false)}
+            className="bg-surface-3 border border-accent-blue rounded px-1 py-0.5 text-xs text-text-primary outline-none"
+          >
+            {availableExpiries.map((exp) => (
+              <option key={exp} value={exp}>{fmtExpiryShort(exp)}</option>
+            ))}
+          </select>
+        ) : (
+          <button
+            onClick={() => isOption && setEditingExpiry(true)}
+            className={cn(
+              'text-left transition-colors',
+              isOption ? 'hover:text-text-primary cursor-pointer' : 'cursor-default'
+            )}
+            title={isOption ? 'Click to change expiry' : undefined}
+          >
+            {fmtExpiryShort(effectiveExpiry) || <span className="italic text-loss text-[10px]">no expiry</span>}
+          </button>
+        )}
       </td>
 
       {/* Lots — click to edit inline */}
@@ -601,6 +672,7 @@ interface PositionsTabProps {
   legs: StrategyLeg[]
   enabledLegs: Set<string>
   expiry: string
+  selectedExpiry?: string | null
   addFormSide: 'BUY' | 'SELL' | null
   selectedFutExpiry: string | null
   onAddLeg: (leg: StrategyLeg) => void
@@ -610,6 +682,7 @@ interface PositionsTabProps {
   onToggleSide: (id: string) => void
   onRemoveLeg: (id: string) => void
   onEditEntryPrice: (id: string, price: number) => void
+  onEditExpiry: (id: string, expiry: string) => void
   onLoadPreset: (legs: StrategyLeg[]) => void
   onSwitchToOptionChain: () => void
   onSwitchToLegEditor: () => void
@@ -623,8 +696,10 @@ export function PositionsTab({
   legs,
   enabledLegs,
   expiry,
+  selectedExpiry,
   addFormSide,
   selectedFutExpiry,
+  onEditExpiry,
   onAddLeg,
   onSetAddFormSide,
   onToggleLeg: _onToggleLeg,
@@ -682,6 +757,7 @@ export function PositionsTab({
             underlying={underlying}
             lotSize={lotSize}
             expiry={expiry}
+            selectedExpiry={selectedExpiry}
             onLoadPreset={onLoadPreset}
             onBuildOptionChain={onSwitchToOptionChain}
             onBuildLegEditor={onSwitchToLegEditor}
@@ -713,9 +789,11 @@ export function PositionsTab({
                     key={leg.id}
                     leg={leg}
                     index={idx + 1}
+                    underlying={underlying}
                     onRemove={onRemoveLeg}
                     onEditLots={onEditLots}
                     onEditEntryPrice={onEditEntryPrice}
+                    onEditExpiry={onEditExpiry}
                   />
                 ))}
               </tbody>
