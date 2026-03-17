@@ -1,9 +1,11 @@
 import { useState, useMemo } from 'react'
-import { ChevronRight, ChevronDown, TrendingUp, Bell, X } from 'lucide-react'
+import { ChevronRight, ChevronDown, TrendingUp, Bell, X, ShieldAlert } from 'lucide-react'
 import { fmtINRCompact, profitLossClass, cn } from '@/lib/utils'
 import { ExpiryGroup } from './ExpiryGroup'
 import { AlertConfigModal } from './AlertConfigModal'
 import { ExitConfirmModal } from './ExitConfirmModal'
+import * as Dialog from '@radix-ui/react-dialog'
+import { AlertList } from '@/components/AlertManager/AlertList'
 import type { LiveStrategy } from '@hooks/useLivePositions'
 import type { AlertSeverity } from '@/types/domain'
 import { useAlertStore } from '@store/alertStore'
@@ -26,6 +28,7 @@ export function StrategyRow({ strategy, checkedLegs, onCheck, onSelect, isSelect
   const [expanded, setExpanded] = useState(true)
   const [alertOpen, setAlertOpen] = useState(false)
   const [exitOpen, setExitOpen] = useState(false)
+  const [rulesOpen, setRulesOpen] = useState(false)
 
   const events = useAlertStore((s) => s.events)
   const strategyAlerts = useMemo(
@@ -83,6 +86,13 @@ export function StrategyRow({ strategy, checkedLegs, onCheck, onSelect, isSelect
               <Bell size={13} />
             </button>
             <button
+              onClick={() => setRulesOpen(true)}
+              className="p-1 text-text-muted hover:text-accent-purple transition-colors"
+              title="Alert rule builder"
+            >
+              <ShieldAlert size={13} />
+            </button>
+            <button
               onClick={onSelect}
               className="p-1 text-text-muted hover:text-accent-blue transition-colors"
               title="Payoff chart"
@@ -122,6 +132,23 @@ export function StrategyRow({ strategy, checkedLegs, onCheck, onSelect, isSelect
         onOpenChange={setExitOpen}
         strategy={strategy}
       />
+      <Dialog.Root open={rulesOpen} onOpenChange={setRulesOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/60 z-50" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[560px] max-w-[95vw] h-[580px] bg-surface-1 border border-border-default rounded-xl shadow-modal overflow-hidden flex flex-col">
+            <Dialog.Title className="sr-only">Alert Rules</Dialog.Title>
+            <AlertList
+              strategyId={strategy.id}
+              strategyName={strategy.name}
+              positionLegs={strategy.legs.map(l => ({
+                leg_id: l.id,
+                symbol: l.instrument.symbol,
+                side:   l.side,
+              }))}
+            />
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   )
 }

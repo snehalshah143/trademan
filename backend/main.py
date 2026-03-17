@@ -45,6 +45,14 @@ async def _start_redis_ws_bridge() -> None:
         }
         await hub.broadcast(json.dumps(msg))
 
+        symbol = tick.get("symbol", "")
+        if symbol:
+            try:
+                from alerts.alert_engine import alert_engine as _ae
+                await _ae.on_tick(symbol, ltp)
+            except Exception:
+                pass
+
     global _redis_ws_task
     _redis_ws_task = await redis_service.subscribe_ticks(_relay)
 
@@ -69,6 +77,9 @@ async def lifespan(app: FastAPI):
     await mtm_tracker.start()
 
     await _start_redis_ws_bridge()
+
+    from alerts.alert_engine import alert_engine
+    await alert_engine.start()
 
     # ── Instrument sync (non-blocking background task) ─────────────────────
     async def _run_instrument_sync() -> None:
@@ -129,6 +140,7 @@ app.add_middleware(
 from api.routes import strategies, alerts, positions, orders, instruments
 from api.routes import settings as settings_router
 from api.routes import quotes as quotes_router
+from api.routes import alert_rules as alert_rules_router
 from ws.endpoint import router as ws_router
 
 app.include_router(strategies.router,       prefix="/api/v1")
@@ -138,6 +150,7 @@ app.include_router(orders.router,           prefix="/api/v1")
 app.include_router(settings_router.router,  prefix="/api/v1")
 app.include_router(instruments.router,      prefix="/api")
 app.include_router(quotes_router.router,    prefix="/api")
+app.include_router(alert_rules_router.router, prefix="/api/v1")
 app.include_router(ws_router)
 
 

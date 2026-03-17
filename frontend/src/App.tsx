@@ -4,6 +4,7 @@ import { PositionManager } from './modules/position-manager/PositionManager'
 import { StrategyBuilder } from './modules/strategy-builder/StrategyBuilder'
 import { Settings } from './modules/settings/Settings'
 import { useMarketWebSocket } from './hooks/useMarketWebSocket'
+import { AlertToast } from './components/AlertManager/AlertToast'
 
 function OrderBookPlaceholder() {
   return (
@@ -24,6 +25,7 @@ export function App() {
         <Route path="/orders"   element={<OrderBookPlaceholder />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
+      <AlertToast />
     </AppShell>
   )
 }
