@@ -40,8 +40,15 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
       : 'INFO'
       : null
 
-  // Group legs by expiry
-  const byExpiry = strategy.legs.reduce<Record<string, typeof strategy.legs>>((acc, leg) => {
+  // Sort all legs: BUY first, then SELL — assign global leg numbers
+  const sortedLegs = [...strategy.legs].sort((a, b) => {
+    if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
+    return a.legIndex - b.legIndex
+  })
+  const legNumberMap = new Map(sortedLegs.map((leg, i) => [leg.id, i + 1]))
+
+  // Group legs by expiry (preserving sorted order)
+  const byExpiry = sortedLegs.reduce<Record<string, typeof strategy.legs>>((acc, leg) => {
     const exp = leg.instrument.expiry ?? 'spot'
     if (!acc[exp]) acc[exp] = []
     acc[exp].push(leg)
@@ -175,6 +182,7 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
           key={expiry}
           expiry={expiry}
           legs={legs}
+          legNumberMap={legNumberMap}
           onExitLeg={() => {/* handled in PositionManager */}}
         />
       ))}

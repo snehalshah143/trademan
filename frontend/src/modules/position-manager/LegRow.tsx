@@ -5,8 +5,9 @@ import { fmtINRCompact, profitLossClass, cn } from '@/lib/utils'
 import type { LiveLeg } from '@hooks/useLivePositions'
 
 interface LegRowProps {
-  leg:     LiveLeg
-  onExit:  (legId: string) => void
+  leg:       LiveLeg
+  legNumber: number
+  onExit:    (legId: string) => void
 }
 
 function LotsPill({ value }: { value: number }) {
@@ -31,7 +32,7 @@ function QtyPill({ value }: { value: number }) {
   )
 }
 
-export function LegRow({ leg, onExit }: LegRowProps) {
+export function LegRow({ leg, legNumber, onExit }: LegRowProps) {
   const symbol  = leg.instrument.symbol
   const entry   = useLTPStore((s) => s.ltpMap[symbol])
   const flashKey = entry?.flashKey ?? 0
@@ -56,18 +57,28 @@ export function LegRow({ leg, onExit }: LegRowProps) {
 
   return (
     <tr className={cn('border-b border-border-subtle hover:bg-surface-4 transition-colors', rowBg)}>
-      {/* Action icons */}
+      {/* Action icons + Leg label */}
       <td className="px-4 py-2.5">
-        <div className="flex items-center gap-1.5">
-          <button className="p-0.5 text-text-muted hover:text-accent-blue transition-colors" title="Payoff chart">
-            <TrendingUp size={12} />
-          </button>
-          <button className="p-0.5 text-text-muted hover:text-accent-blue transition-colors" title="Order book">
-            <BookOpen size={12} />
-          </button>
-          <button className="p-0.5 text-text-muted hover:text-accent-amber transition-colors" title="Alert">
-            <Bell size={12} />
-          </button>
+        <div className="flex items-center gap-2">
+          <span className={cn(
+            'text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0',
+            leg.side === 'BUY'
+              ? 'bg-profit/15 text-profit'
+              : 'bg-loss/15 text-loss'
+          )}>
+            L{legNumber}
+          </span>
+          <div className="flex items-center gap-1">
+            <button className="p-0.5 text-text-muted hover:text-accent-blue transition-colors" title="Payoff chart">
+              <TrendingUp size={12} />
+            </button>
+            <button className="p-0.5 text-text-muted hover:text-accent-blue transition-colors" title="Order book">
+              <BookOpen size={12} />
+            </button>
+            <button className="p-0.5 text-text-muted hover:text-accent-amber transition-colors" title="Alert">
+              <Bell size={12} />
+            </button>
+          </div>
         </div>
       </td>
 
