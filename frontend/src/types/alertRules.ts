@@ -1,97 +1,242 @@
-// ─── Types for the Alert Rule Builder (nested condition tree system) ──────────
-// Separate from the existing AlertRule/AlertEvent types in domain.ts
+// ─── Types for the Alert Rule Builder (Chartink-style condition tree) ────────
 
 export type ConditionScope = 'STRATEGY' | 'LEG' | 'SPOT' | 'INDICATOR'
+
+export type Timeframe = '1m' | '3m' | '5m' | '10m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w'
 
 export type ConditionOperator =
   | 'GTE' | 'LTE' | 'GT' | 'LT' | 'EQ'
   | 'CROSS_ABOVE' | 'CROSS_BELOW'
 
-export interface Condition {
-  id: string
-  scope: ConditionScope
-  metric: string
-  operator: ConditionOperator
-  value: number | null
-  leg_id: string | null
-  params: Record<string, unknown>
+// ── Param & Metric config ─────────────────────────────────────────────────────
+
+export interface ParamDef {
+  key:     string
+  label:   string
+  default: number
+  min?:    number
+  max?:    number
+  step?:   number
 }
 
-export interface ConditionGroup {
-  id: string
-  op: 'AND' | 'OR'
-  conditions: Condition[]
-  groups: ConditionGroup[]
+export interface MetricConfig {
+  value:           string
+  label:           string
+  unit:            '₹' | '%' | '' | 'pts'
+  needsTimeframe:  boolean
+  params:          ParamDef[]
+  description?:    string
 }
 
-export interface AlertRuleBuilderData {
-  alert_id?: string
-  strategy_id: string
-  name: string
-  description: string
-  is_active: boolean
-  trigger_once: boolean
-  cooldown_secs: number
-  triggered_count?: number
-  last_triggered?: string | null
-  notify_popup: boolean
-  notify_telegram: boolean
-  notify_email: boolean
-  notify_webhook: boolean
-  notify_sound: boolean
-  webhook_url: string
-  telegram_chat_id: string
-  condition_tree: ConditionGroup
-  created_at?: string
-  updated_at?: string
-}
-
-// ── Metric options per scope ──────────────────────────────────────────────────
-
-export const METRIC_OPTIONS: Record<ConditionScope, Array<{ value: string; label: string }>> = {
+export const METRIC_CONFIGS: Record<ConditionScope, MetricConfig[]> = {
   STRATEGY: [
-    { value: 'MTM',     label: 'MTM (P&L)' },
-    { value: 'PNL_PCT', label: 'PnL %' },
-    { value: 'PROFIT',  label: 'Profit' },
-    { value: 'LOSS',    label: 'Loss' },
+    {
+      value: 'MTM',        label: 'MTM P&L (₹)',         unit: '₹', needsTimeframe: false, params: [],
+      description: 'Net strategy profit/loss in ₹',
+    },
+    {
+      value: 'MTM_PCT',    label: 'MTM %',                unit: '%', needsTimeframe: false, params: [],
+      description: 'Strategy P&L as % of initial capital',
+    },
+    {
+      value: 'MAX_PROFIT', label: 'Max Profit Hit (₹)',   unit: '₹', needsTimeframe: false, params: [],
+      description: 'Highest MTM reached in session',
+    },
+    {
+      value: 'MAX_LOSS',   label: 'Max Loss Hit (₹)',     unit: '₹', needsTimeframe: false, params: [],
+      description: 'Deepest drawdown in session (absolute ₹)',
+    },
   ],
   LEG: [
-    { value: 'LTP',             label: 'LTP' },
-    { value: 'PREMIUM_CHANGE',  label: 'Premium change %' },
-    { value: 'PNL',             label: 'Leg P&L' },
+    { value: 'LTP',             label: 'LTP (₹)',             unit: '₹', needsTimeframe: false, params: [] },
+    {
+      value: 'PREMIUM_CHG_PCT', label: 'Premium Change %',    unit: '%', needsTimeframe: false, params: [],
+      description: 'LTP change % from entry price',
+    },
+    {
+      value: 'PREMIUM_CHG_ABS', label: 'Premium Change (₹)', unit: '₹', needsTimeframe: false, params: [],
+      description: 'LTP change ₹ from entry price',
+    },
+    { value: 'LEG_PNL',         label: 'Leg P&L (₹)',         unit: '₹', needsTimeframe: false, params: [] },
   ],
   SPOT: [
-    { value: 'SPOT_PRICE',        label: 'Spot price' },
-    { value: 'SPOT_VS_SUPERTREND', label: 'Spot vs Supertrend' },
+    { value: 'SPOT_PRICE',   label: 'Spot Price (₹)',    unit: '₹', needsTimeframe: false, params: [] },
+    {
+      value: 'SPOT_CHG_PCT', label: 'Spot Change %',     unit: '%', needsTimeframe: false, params: [],
+      description: 'Intraday price change %',
+    },
+    {
+      value: 'SPOT_VS_VWAP', label: 'Spot vs VWAP',      unit: '₹', needsTimeframe: false, params: [],
+      description: 'Spot price relative to VWAP',
+    },
   ],
   INDICATOR: [
-    { value: 'RSI',       label: 'RSI' },
-    { value: 'SUPERTREND', label: 'Supertrend' },
-    { value: 'EMA_CROSS', label: 'EMA Cross' },
+    {
+      value: 'EMA', label: 'EMA', unit: '₹', needsTimeframe: true,
+      params: [{ key: 'period', label: 'Period', default: 21, min: 2, max: 500 }],
+      description: 'Exponential Moving Average',
+    },
+    {
+      value: 'SMA', label: 'SMA', unit: '₹', needsTimeframe: true,
+      params: [{ key: 'period', label: 'Period', default: 20, min: 2, max: 500 }],
+      description: 'Simple Moving Average',
+    },
+    {
+      value: 'SUPERTREND', label: 'Supertrend', unit: '', needsTimeframe: true,
+      params: [
+        { key: 'period', label: 'Period', default: 10, min: 2 },
+        { key: 'factor', label: 'Factor', default: 3,  min: 0.1, step: 0.1 },
+      ],
+      description: 'Supertrend trend indicator',
+    },
+    {
+      value: 'RSI', label: 'RSI', unit: '', needsTimeframe: true,
+      params: [{ key: 'period', label: 'Period', default: 14, min: 2, max: 100 }],
+      description: 'Relative Strength Index (0–100)',
+    },
+    {
+      value: 'MACD_HIST', label: 'MACD Histogram', unit: '', needsTimeframe: true,
+      params: [
+        { key: 'fast',   label: 'Fast',   default: 12, min: 1 },
+        { key: 'slow',   label: 'Slow',   default: 26, min: 1 },
+        { key: 'signal', label: 'Signal', default: 9,  min: 1 },
+      ],
+      description: 'MACD Histogram (MACD line − Signal line)',
+    },
+    {
+      value: 'BB_UPPER', label: 'Bollinger Upper', unit: '₹', needsTimeframe: true,
+      params: [
+        { key: 'period', label: 'Period', default: 20,  min: 2 },
+        { key: 'std',    label: 'Std Dev', default: 2,  min: 0.5, step: 0.5 },
+      ],
+    },
+    {
+      value: 'BB_LOWER', label: 'Bollinger Lower', unit: '₹', needsTimeframe: true,
+      params: [
+        { key: 'period', label: 'Period', default: 20,  min: 2 },
+        { key: 'std',    label: 'Std Dev', default: 2,  min: 0.5, step: 0.5 },
+      ],
+    },
+    {
+      value: 'VWAP', label: 'VWAP', unit: '₹', needsTimeframe: true,
+      params: [],
+      description: 'Volume Weighted Average Price',
+    },
+    {
+      value: 'ATR', label: 'ATR', unit: 'pts', needsTimeframe: true,
+      params: [{ key: 'period', label: 'Period', default: 14, min: 2 }],
+      description: 'Average True Range (volatility)',
+    },
+    {
+      value: 'ADX', label: 'ADX', unit: '', needsTimeframe: true,
+      params: [{ key: 'period', label: 'Period', default: 14, min: 2 }],
+      description: 'Average Directional Index (trend strength 0–100)',
+    },
+    {
+      value: 'STOCH_K', label: 'Stochastic %K', unit: '', needsTimeframe: true,
+      params: [
+        { key: 'k', label: 'K', default: 14, min: 1 },
+        { key: 'd', label: 'D', default: 3,  min: 1 },
+      ],
+      description: 'Stochastic Oscillator (0–100)',
+    },
   ],
 }
 
+// ── Kept for backward compat ──────────────────────────────────────────────────
+
+export const METRIC_OPTIONS: Record<ConditionScope, Array<{ value: string; label: string }>> =
+  Object.fromEntries(
+    Object.entries(METRIC_CONFIGS).map(([scope, cfgs]) => [
+      scope,
+      cfgs.map(c => ({ value: c.value, label: c.label })),
+    ])
+  ) as Record<ConditionScope, Array<{ value: string; label: string }>>
+
+// ── Timeframes ────────────────────────────────────────────────────────────────
+
+export const TIMEFRAME_OPTIONS: Array<{ value: Timeframe; label: string }> = [
+  { value: '1m',  label: '1 min'  },
+  { value: '3m',  label: '3 min'  },
+  { value: '5m',  label: '5 min'  },
+  { value: '10m', label: '10 min' },
+  { value: '15m', label: '15 min' },
+  { value: '30m', label: '30 min' },
+  { value: '1h',  label: '1 hour' },
+  { value: '4h',  label: '4 hour' },
+  { value: '1d',  label: 'Daily'  },
+  { value: '1w',  label: 'Weekly' },
+]
+
+// ── Operators ─────────────────────────────────────────────────────────────────
+
 export const OPERATOR_OPTIONS: Array<{ value: ConditionOperator; label: string }> = [
-  { value: 'GTE',         label: '>=' },
-  { value: 'LTE',         label: '<=' },
-  { value: 'GT',          label: '>'  },
-  { value: 'LT',          label: '<'  },
-  { value: 'EQ',          label: '='  },
-  { value: 'CROSS_ABOVE', label: 'Cross above' },
-  { value: 'CROSS_BELOW', label: 'Cross below' },
+  { value: 'GTE',         label: 'is ≥'           },
+  { value: 'GT',          label: 'is >'           },
+  { value: 'LTE',         label: 'is ≤'           },
+  { value: 'LT',          label: 'is <'           },
+  { value: 'EQ',          label: 'is ='           },
+  { value: 'CROSS_ABOVE', label: 'crosses above'  },
+  { value: 'CROSS_BELOW', label: 'crosses below'  },
 ]
 
 export const CROSS_OPERATORS = new Set<ConditionOperator>(['CROSS_ABOVE', 'CROSS_BELOW'])
 
+// ── Core data types ───────────────────────────────────────────────────────────
+
+export interface Condition {
+  id:        string
+  scope:     ConditionScope
+  metric:    string
+  operator:  ConditionOperator
+  value:     number | null
+  leg_id:    string | null
+  timeframe: Timeframe | null
+  params:    Record<string, number>
+}
+
+export interface ConditionGroup {
+  id:         string
+  op:         'AND' | 'OR'
+  conditions: Condition[]
+  groups:     ConditionGroup[]
+}
+
+export interface AlertRuleBuilderData {
+  alert_id?:        string
+  strategy_id:      string
+  name:             string
+  description:      string
+  is_active:        boolean
+  trigger_once:     boolean
+  cooldown_secs:    number
+  triggered_count?: number
+  last_triggered?:  string | null
+  notify_popup:     boolean
+  notify_telegram:  boolean
+  notify_email:     boolean
+  notify_webhook:   boolean
+  notify_sound:     boolean
+  webhook_url:      string
+  telegram_chat_id: string
+  condition_tree:   ConditionGroup
+  created_at?:      string
+  updated_at?:      string
+}
+
+// ── Factory helpers ───────────────────────────────────────────────────────────
+
 export function defaultCondition(scope: ConditionScope = 'STRATEGY'): Condition {
+  const firstMetric = METRIC_CONFIGS[scope][0]
   return {
-    id:       crypto.randomUUID(),
+    id:        crypto.randomUUID(),
     scope,
-    metric:   METRIC_OPTIONS[scope][0].value,
-    operator: 'LTE',
-    value:    0,
-    leg_id:   null,
-    params:   {},
+    metric:    firstMetric.value,
+    operator:  'LTE',
+    value:     scope === 'STRATEGY' ? -3000 : 0,
+    leg_id:    null,
+    timeframe: firstMetric.needsTimeframe ? '15m' : null,
+    params:    Object.fromEntries((firstMetric.params ?? []).map(p => [p.key, p.default])),
   }
 }
 
@@ -123,27 +268,43 @@ export function defaultAlertRule(strategyId: string): AlertRuleBuilderData {
   }
 }
 
-// ── Preview text builder ──────────────────────────────────────────────────────
+// ── Natural-language preview ──────────────────────────────────────────────────
 
-function conditionText(c: Condition): string {
-  const metricLabel = METRIC_OPTIONS[c.scope]?.find(m => m.value === c.metric)?.label ?? c.metric
-  const opLabel = OPERATOR_OPTIONS.find(o => o.value === c.operator)?.label ?? c.operator
-  const legPart = c.leg_id ? ` [Leg ${c.leg_id}]` : ''
-  const valPart = CROSS_OPERATORS.has(c.operator as ConditionOperator)
-    ? ''
-    : ` ${c.value ?? 0}`
-  return `${c.scope}${legPart} ${metricLabel} ${opLabel}${valPart}`
+function conditionNL(c: Condition): string {
+  const metricCfg = METRIC_CONFIGS[c.scope]?.find(m => m.value === c.metric)
+  const opLabel   = OPERATOR_OPTIONS.find(o => o.value === c.operator)?.label ?? c.operator
+  const unit      = metricCfg?.unit ?? ''
+
+  // Build subject
+  let subject = ''
+  if (c.scope === 'STRATEGY') {
+    subject = `Strategy ${metricCfg?.label ?? c.metric}`
+  } else if (c.scope === 'LEG') {
+    subject = `Leg [${c.leg_id ? c.leg_id.slice(0, 6) : '?'}] ${metricCfg?.label ?? c.metric}`
+  } else if (c.scope === 'SPOT') {
+    subject = metricCfg?.label ?? c.metric
+  } else if (c.scope === 'INDICATOR') {
+    const paramStr = (metricCfg?.params ?? [])
+      .map(p => `${p.label.charAt(0)}:${c.params[p.key] ?? p.default}`)
+      .join(', ')
+    const tf = c.timeframe ?? '15m'
+    subject = `${metricCfg?.label ?? c.metric}${paramStr ? `(${paramStr})` : ''} [${tf}]`
+  }
+
+  if (CROSS_OPERATORS.has(c.operator)) {
+    return `${subject} ${opLabel}`
+  }
+  return `${subject} ${opLabel} ${c.value ?? 0}${unit}`
 }
 
-function groupText(g: ConditionGroup, depth = 0): string {
-  const indent = '  '.repeat(depth)
+function groupNL(g: ConditionGroup, depth = 0): string {
   const parts: string[] = [
-    ...g.conditions.map(c => `${indent}${conditionText(c)}`),
-    ...g.groups.map(sg => `${indent}[${sg.op}]\n${groupText(sg, depth + 1)}`),
+    ...g.conditions.map(c => conditionNL(c)),
+    ...g.groups.map(sg => `(${groupNL(sg, depth + 1)})`),
   ]
-  return parts.join(`\n${indent}${g.op} `)
+  return parts.join(` ${g.op} `)
 }
 
 export function buildPreviewText(tree: ConditionGroup): string {
-  return groupText(tree, 0) || '(no conditions)'
+  return groupNL(tree, 0) || '(no conditions)'
 }
