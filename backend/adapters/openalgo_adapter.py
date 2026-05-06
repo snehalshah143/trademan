@@ -45,7 +45,8 @@ class OpenAlgoAdapter(BrokerAdapter):
 
     def __init__(self, config: Optional[BrokerConfig] = None) -> None:
         self._config = config or BrokerConfig()
-        self._connected: bool = False
+        self._rest_connected: bool = False   # REST API reachable
+        self._ws_connected:   bool = False   # WS stream active (independent)
         self._client: Optional[httpx.AsyncClient] = None
         self._ws_task: Optional[asyncio.Task] = None
         self._ws_symbols: List[str] = []
@@ -82,19 +83,20 @@ class OpenAlgoAdapter(BrokerAdapter):
             )
             data = resp.json()
             if resp.status_code == 200 and data.get("status") == "success":
-                self._connected = True
-                logger.info("[OpenAlgoAdapter] connected to %s", self._config.host)
+                self._rest_connected = True
+                logger.info("[OpenAlgoAdapter] REST connected to %s", self._config.host)
             else:
-                self._connected = False
+                self._rest_connected = False
                 logger.warning(
                     "[OpenAlgoAdapter] connect probe failed: %s", data.get("message", resp.text)
                 )
         except Exception as exc:
-            self._connected = False
+            self._rest_connected = False
             logger.warning("[OpenAlgoAdapter] connect error: %s", exc)
 
     async def disconnect(self) -> None:
-        self._connected = False
+        self._rest_connected = False
+        self._ws_connected   = False
         if self._ws_task and not self._ws_task.done():
             self._ws_task.cancel()
             try:
@@ -108,7 +110,7 @@ class OpenAlgoAdapter(BrokerAdapter):
 
     @property
     def is_connected(self) -> bool:
-        return self._connected
+        return self._rest_connected   # REST connectivity only — WS is independent
 
     # ── Symbols for WS subscription ───────────────────────────────────────────
 
@@ -165,7 +167,7 @@ class OpenAlgoAdapter(BrokerAdapter):
         while True:
             try:
                 async with websockets.connect(uri, ping_interval=20) as ws:
-                    self._connected = True
+                    self._ws_connected = True
                     logger.info("[OpenAlgoAdapter] WS connected to %s", uri)
 
                     # Send subscription message
@@ -189,7 +191,7 @@ class OpenAlgoAdapter(BrokerAdapter):
                 logger.info("[OpenAlgoAdapter] WS task cancelled")
                 return
             except Exception as exc:
-                self._connected = False
+                self._ws_connected = False
                 logger.warning(
                     "[OpenAlgoAdapter] WS disconnected (%s) — reconnecting in %.0fs",
                     exc, _RECONNECT_DELAY,
@@ -322,17 +324,19 @@ class OpenAlgoAdapter(BrokerAdapter):
                 return []
             positions = []
             for p in (data.get("data") or []):
-                qty = int(p.get("netqty", 0) or 0)
+                qty = int(p.get("quantity", p.get("netqty", 0)) or 0)
                 if qty == 0:
                     continue
+                avg = float(p.get("average_price", p.get("buyprice", 0)) or 0)
                 positions.append({
                     "symbol":   p.get("symbol", ""),
                     "exchange": p.get("exchange", "NFO"),
                     "qty":      qty,
-                    "buy_avg":  float(p.get("buyprice", 0) or 0),
-                    "sell_avg": float(p.get("sellprice", 0) or 0),
+                    "buy_avg":  avg if qty > 0 else 0.0,
+                    "sell_avg": avg if qty < 0 else 0.0,
                     "pnl":      float(p.get("pnl", 0) or 0),
                     "product":  p.get("product", "MIS"),
+                    "ltp":      float(p.get("ltp", 0) or 0),
                 })
             return positions
         except Exception as exc:

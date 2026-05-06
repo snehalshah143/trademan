@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { ChevronRight, ChevronDown, TrendingUp, Bell, X, ShieldAlert } from 'lucide-react'
+import { ChevronDown, ChevronRight, Bell, ShieldAlert, X, Trash2 } from 'lucide-react'
 import { fmtINRCompact, profitLossClass, cn } from '@/lib/utils'
 import { ExpiryGroup } from './ExpiryGroup'
 import { AlertConfigModal } from './AlertConfigModal'
@@ -9,36 +9,36 @@ import { AlertList } from '@/components/AlertManager/AlertList'
 import type { LiveStrategy } from '@hooks/useLivePositions'
 import type { AlertSeverity } from '@/types/domain'
 import { useAlertStore } from '@store/alertStore'
+import { useStrategyStore } from '@store/strategyStore'
 
-interface StrategyRowProps {
-  strategy: LiveStrategy
+interface Props {
+  strategy:    LiveStrategy
   checkedLegs: Set<string>
-  onCheck: (legId: string, checked: boolean) => void
-  onSelect: () => void
-  isSelected: boolean
+  onCheck:     (legId: string, checked: boolean) => void
+  onSelect:    (id: string | null) => void
+  isSelected:  boolean
 }
 
-function alertBorderClass(severity: AlertSeverity | null) {
-  if (severity === 'CRITICAL') return 'border-l-2 border-l-loss'
-  if (severity === 'WARNING')  return 'border-l-2 border-l-accent-amber'
-  return ''
-}
+export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
+  const [expanded,       setExpanded]       = useState(false)
+  const [alertOpen,      setAlertOpen]      = useState(false)
+  const [exitOpen,       setExitOpen]       = useState(false)
+  const [rulesOpen,      setRulesOpen]      = useState(false)
+  const [confirmRemove,  setConfirmRemove]  = useState(false)
 
-export function StrategyRow({ strategy, checkedLegs, onCheck, onSelect, isSelected }: StrategyRowProps) {
-  const [expanded, setExpanded] = useState(true)
-  const [alertOpen, setAlertOpen] = useState(false)
-  const [exitOpen, setExitOpen] = useState(false)
-  const [rulesOpen, setRulesOpen] = useState(false)
+  const removeStrategy = useStrategyStore((s) => s.removeStrategy)
 
   const events = useAlertStore((s) => s.events)
   const strategyAlerts = useMemo(
     () => events.filter((e) => e.strategyId === strategy.id),
     [events, strategy.id]
   )
-  const latestSeverity: AlertSeverity | null = strategyAlerts.length > 0
-    ? (strategyAlerts.some((a) => a.severity === 'CRITICAL') ? 'CRITICAL' :
-       strategyAlerts.some((a) => a.severity === 'WARNING') ? 'WARNING' : 'INFO')
-    : null
+  const latestSeverity: AlertSeverity | null =
+    strategyAlerts.length > 0
+      ? strategyAlerts.some((a) => a.severity === 'CRITICAL') ? 'CRITICAL'
+      : strategyAlerts.some((a) => a.severity === 'WARNING')  ? 'WARNING'
+      : 'INFO'
+      : null
 
   // Group legs by expiry
   const byExpiry = strategy.legs.reduce<Record<string, typeof strategy.legs>>((acc, leg) => {
@@ -48,90 +48,143 @@ export function StrategyRow({ strategy, checkedLegs, onCheck, onSelect, isSelect
     return acc
   }, {})
 
+  const netPnl = strategy.liveMTM
+
   return (
     <>
-      {/* Strategy header row */}
+      {/* ── Strategy card header ─────────────────────────────── */}
       <tr
         className={cn(
-          'cursor-pointer bg-surface-2 border-b border-border-subtle',
-          alertBorderClass(latestSeverity),
-          isSelected ? 'bg-surface-3' : 'hover:bg-surface-3'
+          'cursor-pointer border-b border-border-default transition-colors',
+          latestSeverity === 'CRITICAL' ? 'border-l-2 border-l-loss' :
+          latestSeverity === 'WARNING'  ? 'border-l-2 border-l-accent-amber' : '',
+          isSelected ? 'bg-surface-3' : 'bg-surface-2 hover:bg-surface-3'
         )}
-        onClick={() => { setExpanded((e) => !e); onSelect() }}
+        onClick={() => {
+          if (expanded) {
+            setExpanded(false)
+            onSelect(null)           // always deselect on collapse
+          } else {
+            setExpanded(true)
+            onSelect(strategy.id)   // select on expand
+          }
+        }}
       >
-        <td className="px-3 py-2.5 text-left w-8">
-          {expanded ? <ChevronDown size={14} className="text-text-muted" /> : <ChevronRight size={14} className="text-text-muted" />}
-        </td>
-        <td className="px-3 py-2.5 text-left" colSpan={5}>
+        {/* Expand icon + name */}
+        <td className="px-4 py-3" colSpan={7}>
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm text-text-primary">{strategy.name}</span>
+            {expanded
+              ? <ChevronDown size={14} className="text-text-muted shrink-0" />
+              : <ChevronRight size={14} className="text-text-muted shrink-0" />
+            }
+            <span className="text-sm font-semibold text-text-primary">{strategy.name}</span>
             <span className="text-text-muted text-xs">#{strategy.id.slice(0, 6)}</span>
             {latestSeverity && (
-              <div className={cn('w-1.5 h-1.5 rounded-full', latestSeverity === 'CRITICAL' ? 'bg-loss' : 'bg-accent-amber')} />
+              <div className={cn(
+                'w-1.5 h-1.5 rounded-full',
+                latestSeverity === 'CRITICAL' ? 'bg-loss animate-pulse' : 'bg-accent-amber animate-pulse'
+              )} />
             )}
           </div>
         </td>
-        <td className="px-3 py-2.5 text-right">
-          <span className={cn('num text-num-lg font-bold', profitLossClass(strategy.liveMTM))}>
-            {fmtINRCompact(strategy.liveMTM)}
-          </span>
-        </td>
-        <td className="px-3 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-end gap-1">
-            <button
-              onClick={() => setAlertOpen(true)}
-              className="p-1 text-text-muted hover:text-accent-amber transition-colors"
-              title="Alert rules"
-            >
-              <Bell size={13} />
-            </button>
-            <button
-              onClick={() => setRulesOpen(true)}
-              className="p-1 text-text-muted hover:text-accent-purple transition-colors"
-              title="Alert rule builder"
-            >
-              <ShieldAlert size={13} />
-            </button>
-            <button
-              onClick={onSelect}
-              className="p-1 text-text-muted hover:text-accent-blue transition-colors"
-              title="Payoff chart"
-            >
-              <TrendingUp size={13} />
-            </button>
-            <button
-              onClick={() => setExitOpen(true)}
-              className="p-1 text-text-muted hover:text-loss transition-colors"
-              title="Exit strategy"
-            >
-              <X size={13} />
-            </button>
+
+        {/* Net Profit */}
+        <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-end gap-3">
+            <div className="flex items-center gap-1 text-xs text-text-muted">
+              <span>Net Profit</span>
+              <span className={cn('num font-bold text-sm', profitLossClass(netPnl))}>
+                {netPnl >= 0 ? '+' : ''}{fmtINRCompact(netPnl)}
+              </span>
+            </div>
+            {/* Action buttons */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setAlertOpen(true)}
+                className="p-1 text-text-muted hover:text-accent-amber transition-colors"
+                title="Alerts"
+              >
+                <Bell size={13} />
+              </button>
+              <button
+                onClick={() => setRulesOpen(true)}
+                className="p-1 text-text-muted hover:text-accent-purple transition-colors"
+                title="Alert rules"
+              >
+                <ShieldAlert size={13} />
+              </button>
+              <button
+                onClick={() => setExitOpen(true)}
+                className="p-1 text-text-muted hover:text-loss transition-colors"
+                title="Exit strategy"
+              >
+                <X size={13} />
+              </button>
+              {/* Remove from view */}
+              {!confirmRemove ? (
+                <button
+                  onClick={() => setConfirmRemove(true)}
+                  className="p-1 text-text-muted hover:text-loss transition-colors"
+                  title="Remove from strategies view"
+                >
+                  <Trash2 size={13} />
+                </button>
+              ) : (
+                <div className="flex items-center gap-1 ml-1">
+                  <span className="text-[10px] text-text-muted">Remove?</span>
+                  <button
+                    onClick={() => removeStrategy(strategy.id)}
+                    className="px-2 py-0.5 text-[10px] font-medium bg-loss text-white rounded transition-colors hover:bg-red-600"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    onClick={() => setConfirmRemove(false)}
+                    className="px-2 py-0.5 text-[10px] font-medium border border-border-default text-text-secondary rounded hover:text-text-primary transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </td>
+
+        {/* Placeholder exit column */}
+        <td />
       </tr>
 
-      {/* Expanded legs */}
+      {/* ── Column headers (once per strategy) ──────────────── */}
+      {expanded && (
+        <tr className="bg-surface-2 border-b border-border-subtle text-[10px] text-text-muted uppercase tracking-wider font-medium">
+          <th className="px-4 py-1.5 text-left w-24">Action</th>
+          <th className="px-3 py-1.5 text-left">Trade Instrument</th>
+          <th className="px-3 py-1.5 text-center w-20">Product</th>
+          <th className="px-3 py-1.5 text-center w-16">Lots</th>
+          <th className="px-3 py-1.5 text-center w-24">Qty</th>
+          <th className="px-3 py-1.5 text-right w-20">Avg Price</th>
+          <th className="px-3 py-1.5 text-right w-20">LTP</th>
+          <th className="px-3 py-1.5 text-right w-28">P & L</th>
+          <th className="px-3 py-1.5 text-center w-12">Exit</th>
+        </tr>
+      )}
+
+      {/* ── Expiry groups (legs only, no sub-header) ─────────── */}
       {expanded && Object.entries(byExpiry).map(([expiry, legs]) => (
         <ExpiryGroup
           key={expiry}
           expiry={expiry}
           legs={legs}
-          checkedLegs={checkedLegs}
-          onCheck={onCheck}
-          onExitLeg={(_legId) => {/* handled in PositionManager */}}
+          onExitLeg={() => {/* handled in PositionManager */}}
         />
       ))}
 
-      <AlertConfigModal
-        open={alertOpen}
-        onOpenChange={setAlertOpen}
-        strategy={strategy}
-      />
-      <ExitConfirmModal
-        open={exitOpen}
-        onOpenChange={setExitOpen}
-        strategy={strategy}
-      />
+      {/* Spacer row between strategies */}
+      <tr className="h-2 bg-transparent" />
+
+      <AlertConfigModal open={alertOpen} onOpenChange={setAlertOpen} strategy={strategy} />
+      <ExitConfirmModal open={exitOpen} onOpenChange={setExitOpen} strategy={strategy} />
+
       <Dialog.Root open={rulesOpen} onOpenChange={setRulesOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/60 z-50" />
@@ -140,7 +193,7 @@ export function StrategyRow({ strategy, checkedLegs, onCheck, onSelect, isSelect
             <AlertList
               strategyId={strategy.id}
               strategyName={strategy.name}
-              positionLegs={strategy.legs.map(l => ({
+              positionLegs={strategy.legs.map((l) => ({
                 leg_id: l.id,
                 symbol: l.instrument.symbol,
                 side:   l.side,

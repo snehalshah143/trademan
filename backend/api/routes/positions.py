@@ -28,6 +28,7 @@ class PositionOut(BaseModel):
     buy_avg:     float
     sell_avg:    float
     pnl:         float
+    ltp:         float = 0.0
     product:     str
     strategy_id: Optional[uuid.UUID] = None
     leg_id:      Optional[uuid.UUID] = None
@@ -78,6 +79,7 @@ async def get_positions(db: AsyncSession = Depends(get_db)):
                 buy_avg=float(p.get("buy_avg", 0)),
                 sell_avg=float(p.get("sell_avg", 0)),
                 pnl=float(p.get("pnl", 0)),
+                ltp=float(p.get("ltp", 0)),
                 product=p.get("product", "MIS"),
                 strategy_id=ctx.get("strategy_id"),
                 leg_id=ctx.get("leg_id"),
