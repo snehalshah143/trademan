@@ -1,8 +1,8 @@
 // ─── Types for the Alert Rule Builder (Chartink-style condition tree) ────────
 
-export type ConditionScope = 'STRATEGY' | 'LEG' | 'SPOT' | 'INDICATOR'
+export type ConditionScope = 'STRATEGY' | 'LEG' | 'SPOT' | 'INDICATOR' | 'CANDLE'
 
-export type Timeframe = '1m' | '3m' | '5m' | '10m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w'
+export type Timeframe = '1m' | '3m' | '5m' | '15m' | '75m' | '1d' | '1w' | '1M'
 
 export type ConditionOperator =
   | 'GTE' | 'LTE' | 'GT' | 'LT' | 'EQ'
@@ -141,6 +141,52 @@ export const METRIC_CONFIGS: Record<ConditionScope, MetricConfig[]> = {
       description: 'Stochastic Oscillator (0–100)',
     },
   ],
+  CANDLE: [
+    {
+      value: 'OPEN',       label: 'Open (₹)',         unit: '₹', needsTimeframe: true,  params: [],
+      description: 'Opening price of the candle',
+    },
+    {
+      value: 'HIGH',       label: 'High (₹)',         unit: '₹', needsTimeframe: true,  params: [],
+      description: 'Highest price of the candle',
+    },
+    {
+      value: 'LOW',        label: 'Low (₹)',          unit: '₹', needsTimeframe: true,  params: [],
+      description: 'Lowest price of the candle',
+    },
+    {
+      value: 'CLOSE',      label: 'Close (₹)',        unit: '₹', needsTimeframe: true,  params: [],
+      description: 'Closing price of the candle (LTP for live candle)',
+    },
+    {
+      value: 'VOLUME',     label: 'Volume',           unit: '',  needsTimeframe: true,  params: [],
+      description: 'Total traded volume in the candle',
+    },
+    {
+      value: 'PREV_CLOSE', label: 'Prev Close (₹)',   unit: '₹', needsTimeframe: true,  params: [],
+      description: 'Closing price of the previous completed candle',
+    },
+    {
+      value: 'BODY_SIZE',  label: 'Body Size (₹)',    unit: '₹', needsTimeframe: true,  params: [],
+      description: '|Close − Open| — absolute candle body height',
+    },
+    {
+      value: 'UPPER_SHADOW', label: 'Upper Shadow (₹)', unit: '₹', needsTimeframe: true, params: [],
+      description: 'High − max(Open, Close)',
+    },
+    {
+      value: 'LOWER_SHADOW', label: 'Lower Shadow (₹)', unit: '₹', needsTimeframe: true, params: [],
+      description: 'min(Open, Close) − Low',
+    },
+    {
+      value: 'CHG_FROM_OPEN', label: 'Change from Open %', unit: '%', needsTimeframe: true, params: [],
+      description: '(Close − Open) / Open × 100',
+    },
+    {
+      value: 'CHG_FROM_PREV', label: 'Change from Prev Close %', unit: '%', needsTimeframe: true, params: [],
+      description: '(Close − Prev Close) / Prev Close × 100',
+    },
+  ],
 }
 
 // ── Kept for backward compat ──────────────────────────────────────────────────
@@ -156,16 +202,14 @@ export const METRIC_OPTIONS: Record<ConditionScope, Array<{ value: string; label
 // ── Timeframes ────────────────────────────────────────────────────────────────
 
 export const TIMEFRAME_OPTIONS: Array<{ value: Timeframe; label: string }> = [
-  { value: '1m',  label: '1 min'  },
-  { value: '3m',  label: '3 min'  },
-  { value: '5m',  label: '5 min'  },
-  { value: '10m', label: '10 min' },
-  { value: '15m', label: '15 min' },
-  { value: '30m', label: '30 min' },
-  { value: '1h',  label: '1 hour' },
-  { value: '4h',  label: '4 hour' },
-  { value: '1d',  label: 'Daily'  },
-  { value: '1w',  label: 'Weekly' },
+  { value: '1m',  label: '1 min'   },
+  { value: '3m',  label: '3 min'   },
+  { value: '5m',  label: '5 min'   },
+  { value: '15m', label: '15 min'  },
+  { value: '75m', label: '75 min'  },
+  { value: '1d',  label: 'Daily'   },
+  { value: '1w',  label: 'Weekly'  },
+  { value: '1M',  label: 'Monthly' },
 ]
 
 // ── Operators ─────────────────────────────────────────────────────────────────
@@ -228,6 +272,7 @@ export interface AlertRuleBuilderData {
 
 export function defaultCondition(scope: ConditionScope = 'STRATEGY'): Condition {
   const firstMetric = METRIC_CONFIGS[scope][0]
+  const defaultTF: Timeframe = scope === 'CANDLE' ? '15m' : '15m'
   return {
     id:        crypto.randomUUID(),
     scope,
@@ -235,7 +280,7 @@ export function defaultCondition(scope: ConditionScope = 'STRATEGY'): Condition 
     operator:  'LTE',
     value:     scope === 'STRATEGY' ? -3000 : 0,
     leg_id:    null,
-    timeframe: firstMetric.needsTimeframe ? '15m' : null,
+    timeframe: firstMetric.needsTimeframe ? defaultTF : null,
     params:    Object.fromEntries((firstMetric.params ?? []).map(p => [p.key, p.default])),
   }
 }
@@ -289,6 +334,9 @@ function conditionNL(c: Condition): string {
       .join(', ')
     const tf = c.timeframe ?? '15m'
     subject = `${metricCfg?.label ?? c.metric}${paramStr ? `(${paramStr})` : ''} [${tf}]`
+  } else if (c.scope === 'CANDLE') {
+    const tf = c.timeframe ?? '15m'
+    subject = `Candle ${metricCfg?.label ?? c.metric} [${tf}]`
   }
 
   if (CROSS_OPERATORS.has(c.operator)) {

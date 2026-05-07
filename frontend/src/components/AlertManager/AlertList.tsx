@@ -31,7 +31,13 @@ export function AlertList({ strategyId, strategyName, positionLegs }: AlertListP
   const [builderOpen, setBuilderOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<AlertRuleBuilderData | null>(null)
 
-  const qKey = ['alert-rules', strategyId]
+  const qKey    = ['alert-rules', strategyId]
+  const qKeyAll = ['alert-rules-all']
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: qKey })
+    queryClient.invalidateQueries({ queryKey: qKeyAll })
+  }
 
   const { data: rules = [], isLoading } = useQuery({
     queryKey: qKey,
@@ -41,14 +47,14 @@ export function AlertList({ strategyId, strategyName, positionLegs }: AlertListP
 
   const toggleMutation = useMutation({
     mutationFn: (alertId: string) => alertRuleService.toggle(alertId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: qKey }),
+    onSuccess: invalidateAll,
     onError: () => toast.error('Failed to toggle alert'),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (alertId: string) => alertRuleService.delete(alertId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qKey })
+      invalidateAll()
       toast.success('Alert deleted')
     },
     onError: () => toast.error('Failed to delete alert'),
@@ -62,7 +68,7 @@ export function AlertList({ strategyId, strategyName, positionLegs }: AlertListP
       return alertRuleService.create(data)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qKey })
+      invalidateAll()
       toast.success('Alert saved')
       setBuilderOpen(false)
       setEditTarget(null)

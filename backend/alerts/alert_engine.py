@@ -149,6 +149,7 @@ class AlertEngine:
             total_mtm += mult * (cur_ltp - entry) * qty
 
         # Spot: try to get underlying spot from Redis
+        underlying: str | None = None
         spot = tick_ltp  # fallback to tick symbol
         try:
             from models.relational import Strategy
@@ -169,6 +170,26 @@ class AlertEngine:
         deployed = sum(l["entry_price"] * l["quantity"] for l in legs)
         pnl_pct = (total_mtm / deployed * 100) if deployed else 0.0
 
+        # Live candle state for all timeframes — uses underlying symbol when available
+        candles: dict[str, dict] = {}
+        try:
+            from services.ltp.candle_builder import TIMEFRAMES as _CB_TFS
+            from services.ltp.ltp_service import ltp_service as _ltp_svc
+            cb = _ltp_svc.candle_builder
+            candle_symbol = underlying or tick_symbol
+            for tf in _CB_TFS:
+                state = cb.get_live(candle_symbol, tf)
+                if state is not None:
+                    candles[tf] = {
+                        "open":   state.open,
+                        "high":   state.high,
+                        "low":    state.low,
+                        "close":  state.close,
+                        "volume": state.volume,
+                    }
+        except Exception:
+            pass
+
         return EvaluationContext({
             "strategy_id":      strategy_id,
             "mtm":              total_mtm,
@@ -179,6 +200,7 @@ class AlertEngine:
             "leg_quantities":   leg_quantities,
             "leg_sides":        leg_sides,
             "indicators":       {},
+            "candles":          candles,
         })
 
     # ── Rule evaluation ────────────────────────────────────────────────────────

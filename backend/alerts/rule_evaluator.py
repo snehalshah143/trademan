@@ -78,7 +78,6 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
     elif scope == "INDICATOR":
         # Indicators are keyed by metric + timeframe in the context for multi-TF support
         timeframe  = condition.get("timeframe") or "15m"
-        params     = condition.get("params", {})
         indicators = ctx.get("indicators", {})
         # Try keyed lookup first: "{METRIC}_{TF}" e.g. "RSI_15m"
         keyed = indicators.get(f"{metric}_{timeframe}")
@@ -97,12 +96,57 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
             "ATR":        "atr",
             "ADX":        "adx",
             "STOCH_K":    "stoch_k",
-            # Legacy
-            "EMA_CROSS":  "ema_cross",
+            "EMA_CROSS":  "ema_cross",  # legacy
         }
         flat_key = simple_keys.get(metric, metric.lower())
         val = indicators.get(flat_key)
         return float(val) if val is not None else None
+
+    elif scope == "CANDLE":
+        # OHLCV candle data — keyed as "candles:{timeframe}" in ctx
+        timeframe = condition.get("timeframe") or "15m"
+        # ctx["candles"] is expected to be dict[timeframe, dict[field, value]]
+        # e.g. {"15m": {"open": 24100, "high": 24250, "low": 24050, "close": 24200, "volume": 123456}}
+        candles = ctx.get("candles", {})
+        candle  = candles.get(timeframe, {})
+
+        field_map = {
+            "OPEN":          "open",
+            "HIGH":          "high",
+            "LOW":           "low",
+            "CLOSE":         "close",
+            "VOLUME":        "volume",
+            "PREV_CLOSE":    "prev_close",
+            "BODY_SIZE":     None,   # computed below
+            "UPPER_SHADOW":  None,
+            "LOWER_SHADOW":  None,
+            "CHG_FROM_OPEN": None,
+            "CHG_FROM_PREV": None,
+        }
+
+        if metric in ("OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "PREV_CLOSE"):
+            val = candle.get(field_map[metric])
+            return float(val) if val is not None else None
+
+        # Derived candle metrics
+        o = candle.get("open")
+        h = candle.get("high")
+        l = candle.get("low")
+        c = candle.get("close")
+        pc = candle.get("prev_close")
+
+        if metric == "BODY_SIZE" and o is not None and c is not None:
+            return abs(float(c) - float(o))
+        if metric == "UPPER_SHADOW" and h is not None and o is not None and c is not None:
+            return float(h) - max(float(o), float(c))
+        if metric == "LOWER_SHADOW" and l is not None and o is not None and c is not None:
+            return min(float(o), float(c)) - float(l)
+        if metric == "CHG_FROM_OPEN" and o is not None and c is not None and float(o) > 0:
+            return ((float(c) - float(o)) / float(o)) * 100
+        if metric == "CHG_FROM_PREV" and pc is not None and c is not None and float(pc) > 0:
+            return ((float(c) - float(pc)) / float(pc)) * 100
+
+        return None
 
     return None
 

@@ -1,15 +1,18 @@
 """
-CandleBuilder — converts raw LTP ticks into OHLCV candles for 5m / 15m / 75m.
+CandleBuilder — converts raw LTP ticks into OHLCV candles.
+
+Supported timeframes:
+  Intraday : 1m, 3m, 5m, 15m, 75m
+  Calendar : 1d (session 09:15–15:30), 1w (Mon–Fri week), 1M (calendar month)
 
 Market hours: 09:15–15:30 IST.  First candle of the day always starts at 09:15.
 Closed candles are persisted to DB via CandleRepository and delivered to registered
 on-close callbacks (indicator engine will subscribe in Phase 5).
 """
-import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from core.database import AsyncSessionLocal
@@ -21,8 +24,11 @@ IST = ZoneInfo("Asia/Kolkata")
 MARKET_OPEN  = time(9, 15)
 MARKET_CLOSE = time(15, 30)
 
-# Timeframe name → minutes
-TIMEFRAMES: Dict[str, int] = {"5m": 5, "15m": 15, "75m": 75}
+# Minute-based intraday timeframes: name → period in minutes
+_MINUTE_TFS: Dict[str, int] = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "75m": 75}
+
+# All supported timeframes in iteration order
+TIMEFRAMES: Tuple[str, ...] = ("1m", "3m", "5m", "15m", "75m", "1d", "1w", "1M")
 
 
 # ── Candle state ──────────────────────────────────────────────────────────────
@@ -42,15 +48,41 @@ class CandleState:
 
 # ── Boundary helpers ──────────────────────────────────────────────────────────
 
-def _candle_start(ts: datetime, minutes: int) -> datetime:
-    """Return the candle-open time that ``ts`` belongs to (IST)."""
+def _candle_bounds(ts: datetime, tf_name: str) -> Tuple[datetime, datetime]:
+    """Return (candle_open_ts, candle_end_ts) for the given tick and timeframe."""
     ts_ist = ts.astimezone(IST)
-    market_open = ts_ist.replace(hour=9, minute=15, second=0, microsecond=0)
-    delta_secs = (ts_ist - market_open).total_seconds()
-    if delta_secs < 0:
-        delta_secs = 0  # before market open — clamp to first candle
-    candle_idx = int(delta_secs // (minutes * 60))
-    return market_open + timedelta(minutes=candle_idx * minutes)
+
+    if tf_name == "1d":
+        # One candle per session: 09:15 → 15:30
+        start = ts_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        end   = start + timedelta(minutes=375)
+
+    elif tf_name == "1w":
+        # Monday of the current calendar week at 09:15
+        days_since_monday = ts_ist.weekday()          # Mon=0 … Sun=6
+        start = (ts_ist - timedelta(days=days_since_monday)).replace(
+            hour=9, minute=15, second=0, microsecond=0
+        )
+        end = start + timedelta(days=7)               # next Monday 09:15
+
+    elif tf_name == "1M":
+        # 1st of the current month at 09:15
+        start = ts_ist.replace(day=1, hour=9, minute=15, second=0, microsecond=0)
+        if ts_ist.month == 12:
+            end = start.replace(year=ts_ist.year + 1, month=1)
+        else:
+            end = start.replace(month=ts_ist.month + 1)
+
+    else:
+        # Minute-based: 1m, 3m, 5m, 15m, 75m — all anchored to 09:15
+        minutes = _MINUTE_TFS[tf_name]
+        market_open = ts_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        delta_secs  = max((ts_ist - market_open).total_seconds(), 0.0)
+        candle_idx  = int(delta_secs // (minutes * 60))
+        start = market_open + timedelta(minutes=candle_idx * minutes)
+        end   = start + timedelta(minutes=minutes)
+
+    return start, end
 
 
 def _in_market_hours(ts: datetime) -> bool:
@@ -86,32 +118,29 @@ class CandleBuilder:
         ts: datetime,
     ) -> None:
         """
-        Process a single tick.  Updates all three timeframe candles.
+        Process a single tick.  Updates all timeframe candles.
         Closes and persists a candle when the period boundary is crossed.
         """
         if not _in_market_hours(ts):
             return
 
-        for tf_name, tf_minutes in TIMEFRAMES.items():
-            await self._update(symbol, tf_name, tf_minutes, ltp, volume, ts)
+        for tf_name in TIMEFRAMES:
+            await self._update(symbol, tf_name, ltp, volume, ts)
 
     async def _update(
         self,
         symbol: str,
         tf_name: str,
-        tf_minutes: int,
         ltp: float,
         volume: int,
         ts: datetime,
     ) -> None:
         key = (symbol, tf_name)
-        start = _candle_start(ts, tf_minutes)
-        end   = start + timedelta(minutes=tf_minutes)
+        start, end = _candle_bounds(ts, tf_name)
 
         existing = self._live.get(key)
 
         if existing is None:
-            # First tick for this symbol+timeframe
             self._live[key] = CandleState(
                 symbol=symbol, timeframe=tf_name,
                 ts=start, end_ts=end,
@@ -129,7 +158,6 @@ class CandleBuilder:
             )
             await self._on_close(closed)
         else:
-            # Update live candle
             existing.high   = max(existing.high, ltp)
             existing.low    = min(existing.low, ltp)
             existing.close  = ltp

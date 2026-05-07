@@ -54,15 +54,16 @@ interface TargetOption {
 
 function buildTargetOptions(legs: Leg[]): TargetOption[] {
   return [
-    { value: 'STRATEGY',  label: 'Strategy',             scope: 'STRATEGY',  leg_id: null },
+    { value: 'STRATEGY',  label: 'Strategy',                    scope: 'STRATEGY',  leg_id: null },
     ...legs.map((l, i) => ({
       value:  `LEG:${l.leg_id}`,
       label:  `Leg ${i + 1} (${l.side})`,
       scope:  'LEG' as ConditionScope,
       leg_id: l.leg_id,
     })),
-    { value: 'SPOT',      label: 'Underlying Spot',      scope: 'SPOT',      leg_id: null },
-    { value: 'INDICATOR', label: 'Indicator on Underlying', scope: 'INDICATOR', leg_id: null },
+    { value: 'SPOT',      label: 'Underlying Spot',             scope: 'SPOT',      leg_id: null },
+    { value: 'CANDLE',    label: 'Underlying OHLCV (Candle)',   scope: 'CANDLE',    leg_id: null },
+    { value: 'INDICATOR', label: 'Indicator on Underlying',     scope: 'INDICATOR', leg_id: null },
   ]
 }
 
@@ -117,17 +118,32 @@ function ConditionCard({ condition, positionLegs, onChange, onRemove }: Conditio
   const metricCfg  = metricCfgs.find(m => m.value === condition.metric) ?? metricCfgs[0]
   const isCross    = CROSS_OPERATORS.has(condition.operator)
 
+  // Cross operators make sense for: SPOT, INDICATOR, and CANDLE price fields (CLOSE/HIGH/LOW)
+  const crossSupportedCandle = new Set(['OPEN', 'HIGH', 'LOW', 'CLOSE', 'PREV_CLOSE'])
+  const supportsCross =
+    condition.scope === 'SPOT' ||
+    condition.scope === 'INDICATOR' ||
+    (condition.scope === 'CANDLE' && crossSupportedCandle.has(condition.metric))
+  const availableOperators = supportsCross
+    ? OPERATOR_OPTIONS
+    : OPERATOR_OPTIONS.filter(o => !CROSS_OPERATORS.has(o.value))
+
   // ── handlers ──────────────────────────────────────────────────────────────
 
   const handleTargetChange = (targetValue: string) => {
     const opt = targetOptions.find(o => o.value === targetValue)
     if (!opt) return
-    const first = METRIC_CONFIGS[opt.scope][0]
+    const first      = METRIC_CONFIGS[opt.scope][0]
+    const crossScopes = new Set<ConditionScope>(['SPOT', 'INDICATOR'])
+    const newSupportsCross = crossScopes.has(opt.scope)
+    const safeOperator =
+      !newSupportsCross && CROSS_OPERATORS.has(condition.operator) ? 'LTE' : condition.operator
     onChange({
       ...condition,
       scope:     opt.scope,
       leg_id:    opt.leg_id,
       metric:    first.value,
+      operator:  safeOperator as typeof condition.operator,
       timeframe: first.needsTimeframe ? (condition.timeframe ?? '15m') : null,
       params:    Object.fromEntries((first.params ?? []).map(p => [p.key, p.default])),
     })
@@ -234,7 +250,7 @@ function ConditionCard({ condition, positionLegs, onChange, onRemove }: Conditio
           }
           className={selectCls}
         >
-          {OPERATOR_OPTIONS.map(o => (
+          {availableOperators.map(o => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
@@ -415,9 +431,10 @@ function GroupBlock({
           </span>
           {(
             [
-              { scope: 'STRATEGY' as ConditionScope, label: 'Strategy condition' },
-              { scope: 'LEG'      as ConditionScope, label: 'Leg condition' },
-              { scope: 'SPOT'     as ConditionScope, label: 'Spot condition' },
+              { scope: 'STRATEGY'  as ConditionScope, label: 'Strategy'  },
+              { scope: 'LEG'       as ConditionScope, label: 'Leg'       },
+              { scope: 'SPOT'      as ConditionScope, label: 'Spot'      },
+              { scope: 'CANDLE'    as ConditionScope, label: 'OHLCV'     },
               { scope: 'INDICATOR' as ConditionScope, label: 'Indicator' },
             ] as const
           ).map(({ scope, label }) => (
