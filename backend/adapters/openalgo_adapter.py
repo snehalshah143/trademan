@@ -50,6 +50,7 @@ class OpenAlgoAdapter(BrokerAdapter):
         self._client: Optional[httpx.AsyncClient] = None
         self._ws_task: Optional[asyncio.Task] = None
         self._ws_symbols: List[str] = []
+        self._ws_conn = None   # active websocket connection (set inside _ws_loop)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -118,6 +119,23 @@ class OpenAlgoAdapter(BrokerAdapter):
         """Set the symbol list to subscribe to on the next WS connect."""
         self._ws_symbols = list(symbols)
 
+    async def subscribe_symbols(self, symbols: List[str]) -> None:
+        """Dynamically subscribe additional symbols on the live WS connection."""
+        new = [s for s in symbols if s not in self._ws_symbols]
+        if not new:
+            return
+        self._ws_symbols.extend(new)
+        if self._ws_conn is not None:
+            try:
+                await self._ws_conn.send(json.dumps({
+                    "action":  "subscribe",
+                    "symbols": new,
+                    "mode":    "ltp",
+                }))
+                logger.info("[OpenAlgoAdapter] subscribed %d new symbols via live WS", len(new))
+            except Exception as exc:
+                logger.warning("[OpenAlgoAdapter] subscribe_symbols send error: %s", exc)
+
     # ── Market data ───────────────────────────────────────────────────────────
 
     async def get_ltp(self, symbol: str) -> float:
@@ -168,6 +186,7 @@ class OpenAlgoAdapter(BrokerAdapter):
             try:
                 async with websockets.connect(uri, ping_interval=20) as ws:
                     self._ws_connected = True
+                    self._ws_conn = ws
                     logger.info("[OpenAlgoAdapter] WS connected to %s", uri)
 
                     # Send subscription message
@@ -188,9 +207,11 @@ class OpenAlgoAdapter(BrokerAdapter):
                             logger.warning("[OpenAlgoAdapter] tick parse error: %s", exc)
 
             except asyncio.CancelledError:
+                self._ws_conn = None
                 logger.info("[OpenAlgoAdapter] WS task cancelled")
                 return
             except Exception as exc:
+                self._ws_conn = None
                 self._ws_connected = False
                 logger.warning(
                     "[OpenAlgoAdapter] WS disconnected (%s) — reconnecting in %.0fs",
@@ -313,34 +334,83 @@ class OpenAlgoAdapter(BrokerAdapter):
     async def get_positions(self) -> List[Dict[str, Any]]:
         """POST /api/v1/positionbook.  Returns normalised position list."""
         if not self._client:
+            raise RuntimeError("OpenAlgo adapter not connected")
+        resp = await self._client.post(
+            "/api/v1/positionbook",
+            json={"apikey": self._config.api_key},
+        )
+        data = resp.json()
+        if data.get("status") != "success":
+            raise RuntimeError(
+                f"OpenAlgo positionbook error: {data.get('message', data.get('status', 'unknown'))}"
+            )
+        positions = []
+        for p in (data.get("data") or []):
+            qty = int(p.get("quantity", p.get("netqty", 0)) or 0)
+            if qty == 0:
+                continue
+            avg = float(p.get("average_price", p.get("buyprice", 0)) or 0)
+            positions.append({
+                "symbol":   p.get("symbol", ""),
+                "exchange": p.get("exchange", "NFO"),
+                "qty":      qty,
+                "buy_avg":  avg if qty > 0 else 0.0,
+                "sell_avg": avg if qty < 0 else 0.0,
+                "pnl":      float(p.get("pnl", 0) or 0),
+                "product":  p.get("product", "MIS"),
+                "ltp":      float(p.get("ltp", 0) or 0),
+            })
+        return positions
+
+    async def list_symbols(self, exchange: str) -> List[Dict[str, Any]]:
+        """
+        Fetch the full instrument list for an exchange from OpenAlgo's master contract.
+
+        Uses GET /api/v1/instruments?apikey=KEY&exchange=EXCHANGE — the same DB that
+        OpenAlgo's own Historify and Search pages query.  Returns all contracts
+        (futures, options, equities) for the given exchange.
+        """
+        if not self._client:
+            return []
+        try:
+            resp = await self._client.get(
+                "/api/v1/instruments",
+                params={"apikey": self._config.api_key, "exchange": exchange.upper(), "format": "json"},
+            )
+            data = resp.json()
+            if data.get("status") != "success":
+                logger.warning("[OpenAlgoAdapter] list_symbols error: %s", data.get("message", ""))
+                return []
+            items = data.get("data") or []
+            return [
+                {"symbol": r["symbol"], "exchange": r.get("exchange", exchange)}
+                for r in items
+                if r.get("symbol")
+            ]
+        except Exception as exc:
+            logger.warning("[OpenAlgoAdapter] list_symbols error: %s", exc)
+            return []
+
+    async def search_symbols(self, query: str, exchange: str) -> List[Dict[str, Any]]:
+        """POST /api/v1/search — search broker instrument master by query string."""
+        if not self._client or len(query) < 2:
             return []
         try:
             resp = await self._client.post(
-                "/api/v1/positionbook",
-                json={"apikey": self._config.api_key},
+                "/api/v1/search",
+                json={"apikey": self._config.api_key, "query": query.upper(), "exchange": exchange},
             )
             data = resp.json()
             if data.get("status") != "success":
                 return []
-            positions = []
-            for p in (data.get("data") or []):
-                qty = int(p.get("quantity", p.get("netqty", 0)) or 0)
-                if qty == 0:
-                    continue
-                avg = float(p.get("average_price", p.get("buyprice", 0)) or 0)
-                positions.append({
-                    "symbol":   p.get("symbol", ""),
-                    "exchange": p.get("exchange", "NFO"),
-                    "qty":      qty,
-                    "buy_avg":  avg if qty > 0 else 0.0,
-                    "sell_avg": avg if qty < 0 else 0.0,
-                    "pnl":      float(p.get("pnl", 0) or 0),
-                    "product":  p.get("product", "MIS"),
-                    "ltp":      float(p.get("ltp", 0) or 0),
-                })
-            return positions
+            results = data.get("data") or []
+            return [
+                {"symbol": r.get("symbol", ""), "exchange": r.get("exchange", exchange)}
+                for r in results
+                if r.get("symbol")
+            ][:50]  # cap results
         except Exception as exc:
-            logger.warning("[OpenAlgoAdapter] positionbook error: %s", exc)
+            logger.warning("[OpenAlgoAdapter] search_symbols error: %s", exc)
             return []
 
     async def get_funds(self) -> Dict[str, Any]:

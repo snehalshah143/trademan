@@ -139,3 +139,63 @@ class MockAdapter(BrokerAdapter):
     async def get_funds(self) -> Dict[str, Any]:
         """Return mock fund details."""
         return {"available": 1_000_000.0, "used": 0.0, "total": 1_000_000.0}
+
+    async def subscribe_symbols(self, symbols: List[str]) -> None:
+        """Seed prices for new symbols so the tick loop starts emitting them."""
+        for sym in symbols:
+            if sym not in self._prices:
+                self._prices[sym] = round(random.uniform(50.0, 500.0), 2)
+        logger.debug("[MockAdapter] seeded %d new symbols", len(symbols))
+
+    async def list_symbols(self, exchange: str) -> List[Dict[str, Any]]:
+        """Return all known symbols for an exchange (used to seed the frontend cache)."""
+        _MOCK: Dict[str, List[str]] = {
+            "NFO": [
+                "NIFTY25JULFUT", "NIFTY25JUL24000CE", "NIFTY25JUL24000PE",
+                "NIFTY25JUL24500CE", "NIFTY25JUL23500PE", "NIFTY25JUL23000PE",
+                "NIFTY25JUL25000CE", "NIFTY25AUGFUT", "NIFTY25AUG24000CE",
+                "BANKNIFTY25JULFUT", "BANKNIFTY25JUL52000CE", "BANKNIFTY25JUL50000PE",
+                "BANKNIFTY25JUL54000CE", "BANKNIFTY25JUL48000PE",
+                "FINNIFTY25JULFUT", "FINNIFTY25JUL22000CE", "FINNIFTY25JUL20000PE",
+                "MIDCPNIFTY25JULFUT",
+                "RELIANCE25JULFUT", "TCS25JULFUT", "INFY25JULFUT",
+                "HDFCBANK25JULFUT", "ICICIBANK25JULFUT", "SBIN25JULFUT",
+                "KOTAKBANK25JULFUT", "AXISBANK25JULFUT", "LT25JULFUT",
+            ],
+            "NSE": [
+                "NIFTY", "BANKNIFTY", "FINNIFTY",
+                "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
+                "SBIN", "HDFC", "KOTAKBANK", "LT", "AXISBANK",
+                "WIPRO", "HINDUNILVR", "ITC", "BAJFINANCE", "MARUTI",
+            ],
+            "BSE": ["SENSEX", "RELIANCE", "TCS", "INFY", "HDFCBANK"],
+            "BFO": ["SENSEX25JULFUT", "SENSEX25JUL82000CE", "SENSEX25JUL80000PE"],
+            "MCX": ["GOLD25JUNFUT", "SILVER25JUNFUT", "CRUDEOIL25JUNFUT", "NATURALGAS25JUNFUT"],
+        }
+        candidates = _MOCK.get(exchange.upper(), [])
+        return [{"symbol": s, "exchange": exchange} for s in candidates]
+
+    async def search_symbols(self, query: str, exchange: str) -> List[Dict[str, Any]]:
+        """Return mock symbols matching the query for dev/testing."""
+        _MOCK: Dict[str, List[str]] = {
+            "NFO": [
+                "NIFTY25JULFUT", "NIFTY25JUL24000CE", "NIFTY25JUL24000PE",
+                "NIFTY25JUL24500CE", "NIFTY25JUL23500PE",
+                "BANKNIFTY25JULFUT", "BANKNIFTY25JUL52000CE", "BANKNIFTY25JUL50000PE",
+                "FINNIFTY25JULFUT",
+                "RELIANCE25JULFUT", "TCS25JULFUT", "INFY25JULFUT",
+                "HDFCBANK25JULFUT", "ICICIBANK25JULFUT",
+            ],
+            "NSE": [
+                "NIFTY", "BANKNIFTY", "FINNIFTY",
+                "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
+                "SBIN", "HDFC", "KOTAKBANK", "LT", "AXISBANK",
+            ],
+            "BSE": ["SENSEX", "RELIANCE", "TCS", "INFY", "HDFCBANK"],
+            "BFO": ["SENSEX25JULFUT", "SENSEX25JUL82000CE", "SENSEX25JUL80000PE"],
+            "MCX": ["GOLD25JUNFUT", "SILVER25JUNFUT", "CRUDEOIL25JUNFUT", "NATURALGAS25JUNFUT"],
+        }
+        q = query.upper()
+        candidates = _MOCK.get(exchange, [])
+        matches = [s for s in candidates if q in s]
+        return [{"symbol": s, "exchange": exchange} for s in matches[:20]]

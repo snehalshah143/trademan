@@ -1,8 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Layers } from 'lucide-react'
+import axios from 'axios'
 import { useLivePositions } from '@hooks/useLivePositions'
+import { useBrokerPositions } from '@hooks/useBrokerPositions'
 import { useAlertStore } from '@store/alertStore'
+import { useLTPStore } from '@store/ltpStore'
+import { useStrategyStore } from '@store/strategyStore'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { StrategyRow } from './StrategyRow'
 import { BrokerPositionsTable } from './BrokerPositionsTable'
@@ -13,6 +17,37 @@ type Tab = 'strategies' | 'broker'
 export function PositionManager() {
   const strategies  = useLivePositions()
   const unreadCount = useAlertStore((s) => s.unreadCount)
+  const updateBatch = useLTPStore((s) => s.updateBatch)
+  const allStrategies = useStrategyStore((s) => s.strategies)
+
+  // Sync broker position LTPs into ltpStore so strategy tab stays consistent
+  // even before WS subscription kicks in (5s polling fallback)
+  const { data: brokerPositions } = useBrokerPositions()
+  useEffect(() => {
+    if (!brokerPositions?.length) return
+    updateBatch(
+      brokerPositions
+        .filter((p) => p.ltp > 0)
+        .map((p) => ({
+          symbol:    p.symbol,
+          ltp:       p.ltp,
+          change:    0,
+          changePct: 0,
+          timestamp: Date.now(),
+        }))
+    )
+  }, [brokerPositions])
+
+  // On mount: tell backend to subscribe all strategy leg symbols for real-time WS ticks
+  useEffect(() => {
+    const symbols = [
+      ...new Set(
+        allStrategies.flatMap((s) => s.legs.map((l) => l.instrument.symbol))
+      ),
+    ].filter(Boolean)
+    if (symbols.length === 0) return
+    axios.post('/api/v1/symbols/subscribe', { symbols }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [tab,         setTab]         = useState<Tab>('broker')
   const [checkedLegs, setCheckedLegs] = useState<Set<string>>(new Set())
@@ -60,8 +95,10 @@ export function PositionManager() {
         </button>
       </div>
 
-      {/* Broker Positions tab */}
-      {tab === 'broker' && <BrokerPositionsTable />}
+      {/* Broker Positions tab — always mounted to keep refetchInterval alive */}
+      <div className={tab === 'broker' ? 'contents' : 'hidden'}>
+        <BrokerPositionsTable />
+      </div>
 
       {/* Strategies tab */}
       {tab === 'strategies' && (

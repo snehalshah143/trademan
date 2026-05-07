@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # ── Market Data ───────────────────────────────────────────────────────────
     ltp_poll_interval_seconds: float = Field(default=0.5, description="LTP polling interval (mock adapter)")
-    ltp_stale_threshold_seconds: float = Field(default=5.0, description="Seconds before LTP is considered stale")
+    ltp_stale_threshold_seconds: float = Field(default=30.0, description="Seconds before LTP is considered stale")
     store_ticks: bool = Field(default=False, description="Archive raw LTP ticks to TimescaleDB")
 
     # ── MTM ───────────────────────────────────────────────────────────────────

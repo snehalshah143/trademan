@@ -38,7 +38,7 @@ export const useLTPStore = create<LTPState>()(
     ltpMap: {},
     connectionStatus: 'DISCONNECTED',
     lastHeartbeat: null,
-    staleThresholdMs: 5000,
+    staleThresholdMs: 30000,
 
     updateTick: (tick: LTPTick) => {
       set((state) => {

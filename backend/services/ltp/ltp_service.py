@@ -82,6 +82,28 @@ class LTPService:
         """Register a symbol for poll-mode fallback (also seeds mock adapter)."""
         self._poll_symbols.add(symbol)
 
+    async def add_symbols(self, symbols: list[str]) -> None:
+        """
+        Register additional symbols for real-time tracking.
+
+        - In WS mode: forwards to adapter.subscribe_symbols() if supported
+          (OpenAlgo sends a new subscribe message on the live connection;
+           MockAdapter seeds random prices so the tick loop starts emitting them)
+        - In poll mode: symbols are added to _poll_symbols and polled each cycle
+        """
+        new = [s for s in symbols if s not in self._poll_symbols]
+        if not new:
+            return
+        for sym in new:
+            self._poll_symbols.add(sym)
+        adapter = get_adapter()
+        if hasattr(adapter, "subscribe_symbols"):
+            try:
+                await adapter.subscribe_symbols(new)
+            except Exception as exc:
+                logger.warning("[LTPService] subscribe_symbols error: %s", exc)
+        logger.info("[LTPService] registered %d new symbols for tracking", len(new))
+
     # ── Tick handler ──────────────────────────────────────────────────────────
 
     async def _on_tick(self, tick: Dict) -> None:

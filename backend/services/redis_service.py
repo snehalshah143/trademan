@@ -187,6 +187,28 @@ class RedisService:
         result = await self._run(self._client.exists(f"signal:{key}:cooldown"))
         return bool(result)
 
+    # ── Symbol list cache ─────────────────────────────────────────────────────
+
+    async def get_symbol_list(self, exchange: str) -> Optional[List[Dict[str, Any]]]:
+        """Return cached symbol list for an exchange, or None if not cached."""
+        raw = await self._run(self._client.get(f"symbols:list:{exchange}"))
+        if raw is None:
+            return None
+        try:
+            import json as _json
+            return _json.loads(raw)
+        except Exception:
+            return None
+
+    async def set_symbol_list(
+        self, exchange: str, symbols: List[Dict[str, Any]], ttl: int = 86400
+    ) -> None:
+        """Cache symbol list for an exchange with a TTL (default 24 h)."""
+        import json as _json
+        await self._run(
+            self._client.set(f"symbols:list:{exchange}", _json.dumps(symbols), ex=ttl)
+        )
+
     # ── MTM hot cache ─────────────────────────────────────────────────────────
 
     async def set_strategy_mtm(self, strategy_id: str, mtm: float) -> None:

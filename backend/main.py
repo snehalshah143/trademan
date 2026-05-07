@@ -100,8 +100,33 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("[TRADEMAN] Instrument sync failed (non-fatal): %s", exc)
 
+    # ── Symbol list cache warm-up (non-blocking) ────────────────────────────
+    async def _warm_symbol_cache() -> None:
+        """Fetch and cache symbol lists for all exchanges so the first frontend
+        request is served instantly from Redis instead of hitting the adapter."""
+        from adapters.adapter_factory import get_adapter as _get_adapter
+        from services.redis_service import redis_service as _rs
+
+        adapter = _get_adapter()
+        for exchange in ("NFO", "NSE", "BSE", "BFO", "MCX"):
+            try:
+                existing = await _rs.get_symbol_list(exchange)
+                if existing:
+                    logger.info("[TRADEMAN] Symbol cache already warm for %s (%d symbols)", exchange, len(existing))
+                    continue
+                if hasattr(adapter, "list_symbols"):
+                    results = await adapter.list_symbols(exchange)
+                else:
+                    results = await adapter.search_symbols("", exchange)
+                if results:
+                    await _rs.set_symbol_list(exchange, results)
+                    logger.info("[TRADEMAN] Symbol cache warmed for %s: %d symbols", exchange, len(results))
+            except Exception as exc:
+                logger.warning("[TRADEMAN] Symbol cache warm failed for %s: %s", exchange, exc)
+
     import asyncio as _asyncio
     _asyncio.create_task(_run_instrument_sync())
+    _asyncio.create_task(_warm_symbol_cache())
 
     yield
 
@@ -151,18 +176,20 @@ from api.routes import quotes as quotes_router
 from api.routes import alert_rules as alert_rules_router
 from api.routes import monitored_positions as mp_router
 from api.routes import monitor_alerts as ma_router
+from api.routes import symbols as symbols_router
 from ws.endpoint import router as ws_router
 
-app.include_router(strategies.router,       prefix="/api/v1")
-app.include_router(alerts.router,           prefix="/api/v1")
-app.include_router(positions.router,        prefix="/api/v1")
-app.include_router(orders.router,           prefix="/api/v1")
-app.include_router(settings_router.router,  prefix="/api/v1")
-app.include_router(instruments.router,      prefix="/api")
-app.include_router(quotes_router.router,    prefix="/api")
+app.include_router(strategies.router,         prefix="/api/v1")
+app.include_router(alerts.router,             prefix="/api/v1")
+app.include_router(positions.router,          prefix="/api/v1")
+app.include_router(orders.router,             prefix="/api/v1")
+app.include_router(settings_router.router,    prefix="/api/v1")
+app.include_router(instruments.router,        prefix="/api")
+app.include_router(quotes_router.router,      prefix="/api")
 app.include_router(alert_rules_router.router, prefix="/api/v1")
-app.include_router(mp_router.router,        prefix="/api/v1")
-app.include_router(ma_router.router,        prefix="/api/v1")
+app.include_router(mp_router.router,          prefix="/api/v1")
+app.include_router(ma_router.router,          prefix="/api/v1")
+app.include_router(symbols_router.router,     prefix="/api/v1")
 app.include_router(ws_router)
 
 

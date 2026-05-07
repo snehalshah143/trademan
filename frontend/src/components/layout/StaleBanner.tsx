@@ -4,17 +4,18 @@ import { useLTPStore } from '@store/ltpStore'
 
 export function StaleBanner() {
   const [dismissed, setDismissed] = useState(false)
-  const isAnyStale = useLTPStore((s) => s.isAnyStale())
   const connectionStatus = useLTPStore((s) => s.connectionStatus)
 
-  // Auto-show again when stale
-  const shouldShow = (isAnyStale || connectionStatus === 'DISCONNECTED') && !dismissed
+  // Show only when connection is lost mid-session (RECONNECTING) or permanently failed.
+  // Do NOT show for DISCONNECTED (initial state before first connect) or CONNECTING.
+  const isConnProblem = connectionStatus === 'RECONNECTING' || connectionStatus === 'FAILED'
+  const shouldShow = isConnProblem && !dismissed
 
   if (!shouldShow) return null
 
-  const message = connectionStatus === 'DISCONNECTED'
-    ? 'Disconnected from market data server'
-    : 'Market data is stale — prices may be outdated'
+  const message = connectionStatus === 'FAILED'
+    ? 'Market data connection lost — please refresh the page'
+    : 'Market data reconnecting…'
 
   return (
     <div className="flex items-center gap-3 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-accent-amber text-sm">

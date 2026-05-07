@@ -131,3 +131,15 @@ class BrokerAdapter(ABC):
                 "total":     float,
             }
         """
+
+    @abstractmethod
+    async def search_symbols(self, query: str, exchange: str) -> List[Dict[str, Any]]:
+        """
+        Search tradable symbols in the broker's instrument master.
+
+        Returns list of dicts::
+
+            [{"symbol": str, "exchange": str}, ...]
+
+        At minimum 2 characters required in query.
+        """

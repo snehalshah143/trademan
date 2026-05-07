@@ -4,10 +4,13 @@ Positions endpoints.
 GET /api/v1/positions        — live positions from broker, enriched with strategy_id
 GET /api/v1/positions/funds  — account fund summary
 """
+import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+logger = logging.getLogger(__name__)
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,7 +52,11 @@ async def get_positions(db: AsyncSession = Depends(get_db)):
     by matching symbol to active strategy legs in the DB.
     """
     adapter = get_adapter()
-    raw_positions = await adapter.get_positions()
+    try:
+        raw_positions = await adapter.get_positions()
+    except Exception as exc:
+        logger.warning("[positions] get_positions failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
 
     if not raw_positions:
         return []
