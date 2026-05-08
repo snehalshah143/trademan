@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import { useLTPStore } from '@store/ltpStore'
 import { useQueries } from '@tanstack/react-query'
-import { WifiOff, Plus, Trash2, RefreshCw, AlertCircle, FolderPlus } from 'lucide-react'
+import { WifiOff, Plus, Trash2, RefreshCw, AlertCircle, FolderPlus, Layers } from 'lucide-react'
 import { useBrokerPositions, useFunds } from '@hooks/useBrokerPositions'
 import { useManualPositionStore, type ManualPosition } from '@store/manualPositionStore'
 import { AddManualPositionModal } from './AddManualPositionModal'
@@ -187,6 +188,20 @@ export function BrokerPositionsTable() {
     axios.post('/api/v1/symbols/subscribe', { symbols }).catch(() => {})
   }, [manualPositions])
 
+  // Sync manual position LTPs into ltpStore so the strategies tab shows live LTPs.
+  // useLTPStore.getState() is imperative access — does NOT create a React subscription,
+  // so calling updateBatch here won't trigger a re-render of this component.
+  // prevLTPsRef lets us bail early when values haven't changed, avoiding spurious writes.
+  const prevLTPsRef = useRef('')
+  const ltpsJson = JSON.stringify(manualLTPs)
+  if (ltpsJson !== prevLTPsRef.current) {
+    prevLTPsRef.current = ltpsJson
+    const ticks = Object.entries(manualLTPs)
+      .filter(([, ltp]) => ltp > 0)
+      .map(([symbol, ltp]) => ({ symbol, ltp, change: 0, changePct: 0, timestamp: Date.now() }))
+    if (ticks.length > 0) useLTPStore.getState().updateBatch(ticks)
+  }
+
   // Connected if we have data OR are fetching (never flicker due to WS drops)
   const brokerConnected = !isError || rawPositions !== undefined
   const totalBrokerPnL  = (positions ?? []).reduce((s, p) => s + p.pnl, 0)
@@ -195,7 +210,15 @@ export function BrokerPositionsTable() {
   const selectedManualPositions = manualPositions.filter((m) => selectedManualIds.has(m.id))
   const selectedPositions = [
     ...selectedBrokerPositions,
-    ...selectedManualPositions.map(manualToBroker),
+    ...selectedManualPositions.map((m) => {
+      const ltp = manualLTPs[m.symbol] ?? 0
+      const avg = m.qty > 0 ? m.buy_avg : m.sell_avg
+      return {
+        ...manualToBroker(m),
+        ltp,
+        pnl: ltp > 0 ? (ltp - avg) * m.qty : 0,
+      }
+    }),
   ]
 
   function toggleRow(symbol: string) {
@@ -379,12 +402,20 @@ export function BrokerPositionsTable() {
                       </span>
                     )}
                   </div>
-                  <button
-                    onClick={() => setAddOpen(true)}
-                    className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-accent-blue hover:bg-blue-500 text-white rounded-md transition-colors"
-                  >
-                    <Plus size={12} /> Add Position
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => window.open('http://127.0.0.1:5000/strategybuilder', 'oa-strategy-builder', 'width=1280,height=800,left=100,top=80,resizable=yes,scrollbars=yes')}
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-surface-3 hover:bg-surface-2 text-text-primary border border-border-default rounded-md transition-colors"
+                    >
+                      <Layers size={12} /> Add Strategy
+                    </button>
+                    <button
+                      onClick={() => setAddOpen(true)}
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-accent-blue hover:bg-blue-500 text-white rounded-md transition-colors"
+                    >
+                      <Plus size={12} /> Add Position
+                    </button>
+                  </div>
                 </div>
               </td>
             </tr>
