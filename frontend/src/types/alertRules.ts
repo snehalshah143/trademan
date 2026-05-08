@@ -2,6 +2,9 @@
 
 export type ConditionScope = 'STRATEGY' | 'LEG' | 'SPOT' | 'INDICATOR' | 'CANDLE'
 
+// RHS of a condition: fixed number OR another indicator/candle/spot value
+export type RHSType = 'NUMBER' | 'SPOT' | 'CANDLE' | 'INDICATOR'
+
 export type Timeframe = '1m' | '3m' | '5m' | '15m' | '75m' | '1d' | '1w' | '1M'
 
 export type ConditionOperator =
@@ -20,13 +23,42 @@ export interface ParamDef {
 }
 
 export interface MetricConfig {
-  value:           string
-  label:           string
-  unit:            '₹' | '%' | '' | 'pts'
-  needsTimeframe:  boolean
-  params:          ParamDef[]
-  description?:    string
+  value:          string
+  label:          string
+  unit:           '₹' | '%' | '' | 'pts'
+  needsTimeframe: boolean
+  params:         ParamDef[]
+  description?:   string
+  supportsSource?: boolean  // true for EMA, SMA — lets user pick what the indicator is computed on
 }
+
+// ── Indicator source options (what an EMA/SMA is applied to) ──────────────────
+
+export interface SourceOption {
+  value: string
+  label: string
+  group: 'Price' | 'Indicator'
+}
+
+export const INDICATOR_SOURCE_OPTIONS: SourceOption[] = [
+  // Price-based sources
+  { value: 'CLOSE',   label: 'Close',         group: 'Price'     },
+  { value: 'OPEN',    label: 'Open',          group: 'Price'     },
+  { value: 'HIGH',    label: 'High',          group: 'Price'     },
+  { value: 'LOW',     label: 'Low',           group: 'Price'     },
+  { value: 'HL2',     label: '(H+L) / 2',     group: 'Price'     },
+  { value: 'HLC3',    label: '(H+L+C) / 3',   group: 'Price'     },
+  { value: 'OHLC4',   label: '(O+H+L+C) / 4', group: 'Price'     },
+  // Indicator-based sources (chained)
+  { value: 'RSI_3',   label: 'RSI (3)',        group: 'Indicator' },
+  { value: 'RSI_9',   label: 'RSI (9)',        group: 'Indicator' },
+  { value: 'RSI_14',  label: 'RSI (14)',       group: 'Indicator' },
+  { value: 'RSI_21',  label: 'RSI (21)',       group: 'Indicator' },
+  { value: 'ATR_14',  label: 'ATR (14)',       group: 'Indicator' },
+  { value: 'ATR_7',   label: 'ATR (7)',        group: 'Indicator' },
+  { value: 'MACD_HIST', label: 'MACD Histogram (12,26,9)', group: 'Indicator' },
+  { value: 'STOCH_K',   label: 'Stochastic %K (14,3)',     group: 'Indicator' },
+]
 
 export const METRIC_CONFIGS: Record<ConditionScope, MetricConfig[]> = {
   STRATEGY: [
@@ -75,11 +107,13 @@ export const METRIC_CONFIGS: Record<ConditionScope, MetricConfig[]> = {
       value: 'EMA', label: 'EMA', unit: '₹', needsTimeframe: true,
       params: [{ key: 'period', label: 'Period', default: 21, min: 2, max: 500 }],
       description: 'Exponential Moving Average',
+      supportsSource: true,
     },
     {
       value: 'SMA', label: 'SMA', unit: '₹', needsTimeframe: true,
       params: [{ key: 'period', label: 'Period', default: 20, min: 2, max: 500 }],
       description: 'Simple Moving Average',
+      supportsSource: true,
     },
     {
       value: 'SUPERTREND', label: 'Supertrend', unit: '', needsTimeframe: true,
@@ -229,14 +263,21 @@ export const CROSS_OPERATORS = new Set<ConditionOperator>(['CROSS_ABOVE', 'CROSS
 // ── Core data types ───────────────────────────────────────────────────────────
 
 export interface Condition {
-  id:        string
-  scope:     ConditionScope
-  metric:    string
-  operator:  ConditionOperator
-  value:     number | null
-  leg_id:    string | null
-  timeframe: Timeframe | null
-  params:    Record<string, number>
+  id:            string
+  scope:         ConditionScope
+  metric:        string
+  operator:      ConditionOperator
+  value:         number | null
+  leg_id:        string | null
+  timeframe:     Timeframe | null
+  params:        Record<string, number>
+  lhs_source:    string           // source for EMA/SMA: 'CLOSE' | 'RSI_14' | etc. (default: 'CLOSE')
+  // RHS (right-hand side) — what to compare against
+  rhs_type:      RHSType          // default: 'NUMBER'
+  rhs_metric:    string           // e.g. 'EMA', 'CLOSE', 'SPOT_PRICE'
+  rhs_timeframe: Timeframe | null // for INDICATOR / CANDLE RHS
+  rhs_params:    Record<string, number> // e.g. { period: 21 } for EMA
+  rhs_source:    string           // source for RHS EMA/SMA (default: 'CLOSE')
 }
 
 export interface ConditionGroup {
@@ -272,16 +313,22 @@ export interface AlertRuleBuilderData {
 
 export function defaultCondition(scope: ConditionScope = 'STRATEGY'): Condition {
   const firstMetric = METRIC_CONFIGS[scope][0]
-  const defaultTF: Timeframe = scope === 'CANDLE' ? '15m' : '15m'
+  const defaultEMA  = METRIC_CONFIGS.INDICATOR.find(m => m.value === 'EMA')!
   return {
-    id:        crypto.randomUUID(),
+    id:            crypto.randomUUID(),
     scope,
-    metric:    firstMetric.value,
-    operator:  'LTE',
-    value:     scope === 'STRATEGY' ? -3000 : 0,
-    leg_id:    null,
-    timeframe: firstMetric.needsTimeframe ? defaultTF : null,
-    params:    Object.fromEntries((firstMetric.params ?? []).map(p => [p.key, p.default])),
+    metric:        firstMetric.value,
+    operator:      'LTE',
+    value:         scope === 'STRATEGY' ? -3000 : 0,
+    leg_id:        null,
+    timeframe:     firstMetric.needsTimeframe ? '15m' : null,
+    params:        Object.fromEntries((firstMetric.params ?? []).map(p => [p.key, p.default])),
+    lhs_source:    'CLOSE',
+    rhs_type:      'NUMBER',
+    rhs_metric:    'EMA',
+    rhs_timeframe: '15m',
+    rhs_params:    Object.fromEntries(defaultEMA.params.map(p => [p.key, p.default])),
+    rhs_source:    'CLOSE',
   }
 }
 
@@ -320,7 +367,7 @@ function conditionNL(c: Condition): string {
   const opLabel   = OPERATOR_OPTIONS.find(o => o.value === c.operator)?.label ?? c.operator
   const unit      = metricCfg?.unit ?? ''
 
-  // Build subject
+  // Build LHS subject
   let subject = ''
   if (c.scope === 'STRATEGY') {
     subject = `Strategy ${metricCfg?.label ?? c.metric}`
@@ -329,20 +376,42 @@ function conditionNL(c: Condition): string {
   } else if (c.scope === 'SPOT') {
     subject = metricCfg?.label ?? c.metric
   } else if (c.scope === 'INDICATOR') {
+    const src      = metricCfg?.supportsSource ? (c.lhs_source ?? 'CLOSE') : null
+    const srcLabel = src ? INDICATOR_SOURCE_OPTIONS.find(s => s.value === src)?.label ?? src : null
     const paramStr = (metricCfg?.params ?? [])
       .map(p => `${p.label.charAt(0)}:${c.params[p.key] ?? p.default}`)
       .join(', ')
     const tf = c.timeframe ?? '15m'
-    subject = `${metricCfg?.label ?? c.metric}${paramStr ? `(${paramStr})` : ''} [${tf}]`
+    const inner = [srcLabel, paramStr].filter(Boolean).join(', ')
+    subject = `${metricCfg?.label ?? c.metric}(${inner}) [${tf}]`
   } else if (c.scope === 'CANDLE') {
     const tf = c.timeframe ?? '15m'
     subject = `Candle ${metricCfg?.label ?? c.metric} [${tf}]`
   }
 
-  if (CROSS_OPERATORS.has(c.operator)) {
-    return `${subject} ${opLabel}`
+  // Build RHS
+  const rhsType = c.rhs_type ?? 'NUMBER'
+  let rhs = ''
+  if (rhsType === 'NUMBER') {
+    rhs = `${c.value ?? 0}${unit}`
+  } else if (rhsType === 'SPOT') {
+    const rhsCfg = METRIC_CONFIGS.SPOT.find(m => m.value === c.rhs_metric)
+    rhs = rhsCfg?.label ?? c.rhs_metric
+  } else if (rhsType === 'CANDLE') {
+    const rhsCfg = METRIC_CONFIGS.CANDLE.find(m => m.value === c.rhs_metric)
+    rhs = `${rhsCfg?.label ?? c.rhs_metric} [${c.rhs_timeframe ?? '15m'}]`
+  } else if (rhsType === 'INDICATOR') {
+    const rhsCfg    = METRIC_CONFIGS.INDICATOR.find(m => m.value === c.rhs_metric)
+    const rhsSrc    = rhsCfg?.supportsSource ? (c.rhs_source ?? 'CLOSE') : null
+    const rhsSrcLbl = rhsSrc ? INDICATOR_SOURCE_OPTIONS.find(s => s.value === rhsSrc)?.label ?? rhsSrc : null
+    const paramStr  = (rhsCfg?.params ?? [])
+      .map(p => `${p.label.charAt(0)}:${c.rhs_params?.[p.key] ?? p.default}`)
+      .join(', ')
+    const inner = [rhsSrcLbl, paramStr].filter(Boolean).join(', ')
+    rhs = `${rhsCfg?.label ?? c.rhs_metric}(${inner}) [${c.rhs_timeframe ?? '15m'}]`
   }
-  return `${subject} ${opLabel} ${c.value ?? 0}${unit}`
+
+  return `${subject} ${opLabel} ${rhs}`
 }
 
 function groupNL(g: ConditionGroup, depth = 0): string {

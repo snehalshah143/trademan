@@ -3,10 +3,8 @@ import { Routes, Route } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { AppShell } from './components/layout/AppShell'
 import { PositionManager } from './modules/position-manager/PositionManager'
-import { StrategyBuilder } from './modules/strategy-builder/StrategyBuilder'
 import { Settings } from './modules/settings/Settings'
 import { AlertManager } from './pages/AlertManager'
-import { MonitoredPositions } from './pages/MonitoredPositions'
 import { useMarketWebSocket } from './hooks/useMarketWebSocket'
 import { AlertToast } from './components/AlertManager/AlertToast'
 import { positionService } from './services/positionService'
@@ -40,8 +38,6 @@ export function App() {
     <AppShell>
       <Routes>
         <Route path="/"         element={<PositionManager />} />
-        <Route path="/builder"  element={<StrategyBuilder />} />
-        <Route path="/monitors"  element={<MonitoredPositions />} />
         <Route path="/alerts"   element={<AlertManager />} />
         <Route path="/orders"   element={<OrderBookPlaceholder />} />
         <Route path="/settings" element={<Settings />} />

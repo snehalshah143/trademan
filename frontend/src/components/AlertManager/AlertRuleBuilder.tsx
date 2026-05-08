@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { Plus, Trash2, ChevronDown, ChevronUp, X, Info } from 'lucide-react'
+import { Plus, Trash2, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type {
   AlertRuleBuilderData,
@@ -7,12 +7,14 @@ import type {
   ConditionGroup,
   ConditionScope,
   ConditionOperator,
+  RHSType,
   Timeframe,
 } from '@/types/alertRules'
 import {
   METRIC_CONFIGS,
   OPERATOR_OPTIONS,
   TIMEFRAME_OPTIONS,
+  INDICATOR_SOURCE_OPTIONS,
   CROSS_OPERATORS,
   defaultCondition,
   defaultGroup,
@@ -21,17 +23,27 @@ import {
 
 // ── Shared style tokens ───────────────────────────────────────────────────────
 
-const selectCls =
-  'bg-surface-3 border border-border-default text-text-primary text-xs rounded px-2 py-1.5 ' +
-  'focus:outline-none focus:border-accent-blue w-full appearance-none cursor-pointer'
+// Chip-style inline select (Chartink-like colored tokens)
+const chipBase =
+  'inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold appearance-none ' +
+  'cursor-pointer focus:outline-none border transition-colors'
+const chipBlue   = `${chipBase} bg-accent-blue/10   border-accent-blue/30   text-accent-blue   hover:bg-accent-blue/20`
+const chipAmber  = `${chipBase} bg-accent-amber/10  border-accent-amber/30  text-accent-amber  hover:bg-accent-amber/20`
+const chipPurple = `${chipBase} bg-accent-purple/10 border-accent-purple/30 text-accent-purple hover:bg-accent-purple/20`
+const chipGreen  = `${chipBase} bg-profit/10        border-profit/30        text-profit        hover:bg-profit/20`
 
+const paramInput =
+  'w-12 text-center text-[11px] text-text-primary bg-surface-3 border border-border-subtle ' +
+  'rounded px-1 py-0.5 focus:outline-none focus:border-accent-blue tabular-nums'
+
+const numInput =
+  'w-20 text-[11px] text-text-primary bg-surface-3 border border-border-default ' +
+  'rounded px-2 py-0.5 focus:outline-none focus:border-profit tabular-nums'
+
+// Used in main AlertRuleBuilder (name/cooldown fields)
 const numCls =
   'bg-surface-3 border border-border-default text-text-primary text-xs rounded px-2 py-1.5 ' +
   'focus:outline-none focus:border-accent-blue tabular-nums w-full'
-
-const paramCls =
-  'bg-surface-4 border border-border-subtle text-text-primary text-xs rounded px-1.5 py-1 ' +
-  'focus:outline-none focus:border-accent-blue tabular-nums w-14 text-center'
 
 const colLabelCls = 'text-[9px] text-text-muted uppercase tracking-widest font-semibold mb-1.5'
 
@@ -67,37 +79,33 @@ function buildTargetOptions(legs: Leg[]): TargetOption[] {
   ]
 }
 
-// ── AND / OR visual connector ─────────────────────────────────────────────────
+// ── Timeframe short-label (Chartink-style prefix) ─────────────────────────────
 
-function AndOrConnector({
-  op,
-  onClick,
-}: {
-  op:      'AND' | 'OR'
-  onClick: () => void
-}) {
-  return (
-    <div className="flex items-center gap-3 py-2 select-none">
-      <div className="flex-1 h-px bg-border-subtle" />
-      <button
-        type="button"
-        onClick={onClick}
-        title="Click to toggle AND / OR"
-        className={cn(
-          'px-4 py-0.5 rounded-full text-[10px] font-bold tracking-widest border transition-all',
-          op === 'AND'
-            ? 'border-accent-blue/40 bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20'
-            : 'border-accent-amber/40 bg-accent-amber/10 text-accent-amber hover:bg-accent-amber/20'
-        )}
-      >
-        {op}
-      </button>
-      <div className="flex-1 h-px bg-border-subtle" />
-    </div>
-  )
+const TF_SHORT: Record<string, string> = {
+  '1m': 'M1', '3m': 'M3', '5m': 'M5', '15m': 'M15',
+  '75m': 'M75', '1d': 'Daily', '1w': 'Weekly', '1M': 'Monthly',
+}
+const tfShort = (tf: string | null) => TF_SHORT[tf ?? '15m'] ?? tf ?? 'M15'
+
+// ── RHS type helpers ──────────────────────────────────────────────────────────
+
+const RHS_TYPE_OPTIONS: Array<{ value: RHSType; label: string }> = [
+  { value: 'NUMBER',    label: '123'       },
+  { value: 'SPOT',      label: 'Spot'      },
+  { value: 'CANDLE',    label: 'OHLCV'     },
+  { value: 'INDICATOR', label: 'Indicator' },
+]
+
+// STRATEGY and LEG only make sense vs a fixed number
+function availableRHSTypes(scope: ConditionScope): RHSType[] {
+  if (scope === 'STRATEGY' || scope === 'LEG') return ['NUMBER']
+  return ['NUMBER', 'SPOT', 'CANDLE', 'INDICATOR']
 }
 
-// ── Single condition card (Chartink-style horizontal row) ─────────────────────
+// Candle metrics usable as RHS (price fields only)
+const CANDLE_RHS_METRICS = ['OPEN', 'HIGH', 'LOW', 'CLOSE', 'PREV_CLOSE']
+
+// ── Single condition row (Chartink sentence-chip style) ───────────────────────
 
 interface ConditionCardProps {
   condition:    Condition
@@ -116,36 +124,33 @@ function ConditionCard({ condition, positionLegs, onChange, onRemove }: Conditio
 
   const metricCfgs = METRIC_CONFIGS[condition.scope]
   const metricCfg  = metricCfgs.find(m => m.value === condition.metric) ?? metricCfgs[0]
-  const isCross    = CROSS_OPERATORS.has(condition.operator)
 
-  // Cross operators make sense for: SPOT, INDICATOR, and CANDLE price fields (CLOSE/HIGH/LOW)
-  const crossSupportedCandle = new Set(['OPEN', 'HIGH', 'LOW', 'CLOSE', 'PREV_CLOSE'])
-  const supportsCross =
-    condition.scope === 'SPOT' ||
-    condition.scope === 'INDICATOR' ||
-    (condition.scope === 'CANDLE' && crossSupportedCandle.has(condition.metric))
-  const availableOperators = supportsCross
-    ? OPERATOR_OPTIONS
-    : OPERATOR_OPTIONS.filter(o => !CROSS_OPERATORS.has(o.value))
+  // All scopes support crosses above/below — e.g. "MTM crosses above 5000" is valid
+  // (edge trigger: fires once on transition, unlike ≥ which fires continuously)
+  const availableOperators = OPERATOR_OPTIONS
+
+  // RHS state
+  const rhsType    = condition.rhs_type ?? 'NUMBER'
+  const rhsOptions = availableRHSTypes(condition.scope)
+  const rhsCfgInd  = METRIC_CONFIGS.INDICATOR.find(m => m.value === (condition.rhs_metric || 'EMA'))
 
   // ── handlers ──────────────────────────────────────────────────────────────
 
   const handleTargetChange = (targetValue: string) => {
     const opt = targetOptions.find(o => o.value === targetValue)
     if (!opt) return
-    const first      = METRIC_CONFIGS[opt.scope][0]
-    const crossScopes = new Set<ConditionScope>(['SPOT', 'INDICATOR'])
-    const newSupportsCross = crossScopes.has(opt.scope)
-    const safeOperator =
-      !newSupportsCross && CROSS_OPERATORS.has(condition.operator) ? 'LTE' : condition.operator
+    const first             = METRIC_CONFIGS[opt.scope][0]
+    const scopeAllowsIndRHS = !(['STRATEGY', 'LEG'] as ConditionScope[]).includes(opt.scope)
     onChange({
       ...condition,
       scope:     opt.scope,
       leg_id:    opt.leg_id,
       metric:    first.value,
-      operator:  safeOperator as typeof condition.operator,
+      // keep existing operator — all operators valid for all scopes now
+      operator:  condition.operator,
       timeframe: first.needsTimeframe ? (condition.timeframe ?? '15m') : null,
       params:    Object.fromEntries((first.params ?? []).map(p => [p.key, p.default])),
+      rhs_type:  scopeAllowsIndRHS ? rhsType : 'NUMBER',
     })
   }
 
@@ -159,150 +164,242 @@ function ConditionCard({ condition, positionLegs, onChange, onRemove }: Conditio
     })
   }
 
+  const handleOperatorChange = (op: ConditionOperator) => {
+    const newIsCross = CROSS_OPERATORS.has(op)
+    // For scopes that support indicator RHS (SPOT/CANDLE/INDICATOR), auto-switch RHS to
+    // INDICATOR when a cross operator is picked — makes the common case one click.
+    // For STRATEGY/LEG, cross vs a NUMBER makes sense (e.g. MTM crosses above 5000).
+    if (newIsCross && rhsType === 'NUMBER' && rhsOptions.includes('INDICATOR')) {
+      const defaultEMA = METRIC_CONFIGS.INDICATOR.find(m => m.value === 'EMA')!
+      onChange({
+        ...condition,
+        operator:      op,
+        rhs_type:      'INDICATOR',
+        rhs_metric:    'EMA',
+        rhs_timeframe: '15m',
+        rhs_params:    Object.fromEntries(defaultEMA.params.map(p => [p.key, p.default])),
+      })
+    } else {
+      onChange({ ...condition, operator: op })
+    }
+  }
+
+  const handleRHSTypeChange = (type: RHSType) => {
+    const defaultMetric =
+      type === 'INDICATOR' ? 'EMA' :
+      type === 'SPOT'      ? 'SPOT_PRICE' :
+      type === 'CANDLE'    ? 'CLOSE' : ''
+    const indCfg = type === 'INDICATOR'
+      ? METRIC_CONFIGS.INDICATOR.find(m => m.value === 'EMA')!
+      : null
+    onChange({
+      ...condition,
+      rhs_type:      type,
+      rhs_metric:    defaultMetric,
+      rhs_timeframe: (type === 'INDICATOR' || type === 'CANDLE') ? '15m' : null,
+      rhs_params:    indCfg ? Object.fromEntries(indCfg.params.map(p => [p.key, p.default])) : {},
+    })
+  }
+
+  const handleRHSIndicatorChange = (metric: string) => {
+    const cfg = METRIC_CONFIGS.INDICATOR.find(m => m.value === metric)
+    onChange({
+      ...condition,
+      rhs_metric: metric,
+      rhs_params: Object.fromEntries((cfg?.params ?? []).map(p => [p.key, p.default])),
+      rhs_source: 'CLOSE', // reset source when indicator changes
+    })
+  }
+
   const handleParam = (key: string, val: number) =>
     onChange({ ...condition, params: { ...condition.params, [key]: val } })
 
-  // ── render ─────────────────────────────────────────────────────────────────
+  const handleRHSParam = (key: string, val: number) =>
+    onChange({ ...condition, rhs_params: { ...condition.rhs_params, [key]: val } })
+
+  // ── render (Chartink sentence-chip style) ─────────────────────────────────
 
   return (
-    <div className="flex items-stretch rounded-lg border border-border-default bg-surface-2 overflow-hidden text-xs group">
+    <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5 rounded-lg bg-surface-2 border border-border-default group min-h-[42px]">
 
-      {/* ── col: TARGET ─────────────────────────────────── */}
-      <div className="px-3 py-2.5 border-r border-border-subtle min-w-[148px] flex-shrink-0">
-        <div className={colLabelCls}>Target</div>
-        <select
-          value={currentTargetValue}
-          onChange={e => handleTargetChange(e.target.value)}
-          className={selectCls}
-        >
-          {targetOptions.map(o => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-      </div>
+      {/* LHS: Target chip */}
+      <select value={currentTargetValue} onChange={e => handleTargetChange(e.target.value)} className={chipBlue}>
+        {targetOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
 
-      {/* ── col: METRIC + inline params ─────────────────── */}
-      <div className="px-3 py-2.5 border-r border-border-subtle flex-1 min-w-[180px]">
-        <div className={colLabelCls}>
-          {condition.scope === 'INDICATOR' ? 'Indicator' : 'Metric'}
-          {metricCfg?.description && (
-            <span className="ml-1 align-middle" title={metricCfg.description}>
-              <Info size={9} className="inline text-text-muted" />
-            </span>
-          )}
-        </div>
-        <select
-          value={condition.metric}
-          onChange={e => handleMetricChange(e.target.value)}
-          className={cn(selectCls, metricCfg?.params.length ? 'mb-2' : '')}
-        >
-          {METRIC_CONFIGS[condition.scope].map(m => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+      {/* LHS: Metric chip */}
+      <select value={condition.metric} onChange={e => handleMetricChange(e.target.value)} className={chipBlue} title={metricCfg?.description}>
+        {METRIC_CONFIGS[condition.scope].map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+      </select>
 
-        {/* Inline param inputs */}
-        {metricCfg && metricCfg.params.length > 0 && (
-          <div className="flex items-center gap-3 flex-wrap">
-            {metricCfg.params.map(p => (
-              <div key={p.key} className="flex items-center gap-1.5">
-                <span className="text-[9px] text-text-muted font-medium uppercase">{p.label}</span>
-                <input
-                  type="number"
-                  value={condition.params[p.key] ?? p.default}
-                  onChange={e => handleParam(p.key, Number(e.target.value))}
-                  min={p.min}
-                  max={p.max}
-                  step={p.step ?? 1}
-                  className={paramCls}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* ── col: TIMEFRAME (indicators only) ────────────── */}
-      {metricCfg?.needsTimeframe && (
-        <div className="px-3 py-2.5 border-r border-border-subtle w-24 flex-shrink-0">
-          <div className={colLabelCls}>Timeframe</div>
+      {/* LHS: Source selector — "of [M15 Close ▾]" — for EMA/SMA. Appears BEFORE params
+           so it reads: EMA of M15 Close (21) [15min] — matching Chartink pattern */}
+      {metricCfg?.supportsSource && (
+        <>
+          <span className="text-[10px] text-text-muted select-none">of</span>
           <select
-            value={condition.timeframe ?? '15m'}
-            onChange={e =>
-              onChange({ ...condition, timeframe: e.target.value as Timeframe })
-            }
-            className={selectCls}
+            value={condition.lhs_source ?? 'CLOSE'}
+            onChange={e => onChange({ ...condition, lhs_source: e.target.value })}
+            className={chipGreen}
           >
-            {TIMEFRAME_OPTIONS.map(tf => (
-              <option key={tf.value} value={tf.value}>{tf.label}</option>
+            {INDICATOR_SOURCE_OPTIONS.map(s => (
+              <option key={s.value} value={s.value}>
+                {tfShort(condition.timeframe)} {s.label}
+              </option>
             ))}
           </select>
+        </>
+      )}
+
+      {/* LHS: Inline params — e.g. (21) */}
+      {metricCfg && metricCfg.params.length > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-[11px] text-text-muted">
+          {'('}
+          {metricCfg.params.map((p, i) => (
+            <span key={p.key} className="inline-flex items-center gap-0.5">
+              {i > 0 && <span className="mx-0.5">,</span>}
+              <input
+                type="number"
+                value={condition.params[p.key] ?? p.default}
+                onChange={e => handleParam(p.key, Number(e.target.value))}
+                min={p.min} max={p.max} step={p.step ?? 1}
+                title={p.label}
+                className={paramInput}
+              />
+            </span>
+          ))}
+          {')'}
+        </span>
+      )}
+
+      {/* LHS: Timeframe chip (for indicators/candles) */}
+      {metricCfg?.needsTimeframe && (
+        <select value={condition.timeframe ?? '15m'} onChange={e => onChange({ ...condition, timeframe: e.target.value as Timeframe })} className={chipPurple}>
+          {TIMEFRAME_OPTIONS.map(tf => <option key={tf.value} value={tf.value}>{tf.label}</option>)}
+        </select>
+      )}
+
+      {/* OPERATOR chip — includes crosses above / crosses below */}
+      <select value={condition.operator} onChange={e => handleOperatorChange(e.target.value as ConditionOperator)} className={chipAmber}>
+        {availableOperators.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+
+      {/* RHS type toggle — only shown when multiple types are available */}
+      {rhsOptions.length > 1 && (
+        <div className="inline-flex rounded overflow-hidden border border-border-subtle">
+          {RHS_TYPE_OPTIONS.filter(o => rhsOptions.includes(o.value)).map(opt => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => handleRHSTypeChange(opt.value)}
+              className={cn(
+                'px-1.5 py-0.5 text-[9px] font-semibold transition-colors',
+                rhsType === opt.value
+                  ? 'bg-profit/20 text-profit'
+                  : 'bg-surface-3 text-text-muted hover:text-text-secondary'
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       )}
 
-      {/* ── col: OPERATOR ───────────────────────────────── */}
-      <div className="px-3 py-2.5 border-r border-border-subtle w-36 flex-shrink-0">
-        <div className={colLabelCls}>Condition</div>
-        <select
-          value={condition.operator}
-          onChange={e =>
-            onChange({ ...condition, operator: e.target.value as ConditionOperator })
-          }
-          className={selectCls}
-        >
-          {availableOperators.map(o => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
+      {/* RHS: NUMBER */}
+      {rhsType === 'NUMBER' && (
+        <input
+          type="number"
+          value={condition.value ?? ''}
+          onChange={e => onChange({ ...condition, value: e.target.value === '' ? null : Number(e.target.value) })}
+          placeholder="0"
+          className={numInput}
+        />
+      )}
+
+      {/* RHS: SPOT metric chip */}
+      {rhsType === 'SPOT' && (
+        <select value={condition.rhs_metric || 'SPOT_PRICE'} onChange={e => onChange({ ...condition, rhs_metric: e.target.value })} className={chipGreen}>
+          {METRIC_CONFIGS.SPOT.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
-      </div>
+      )}
 
-      {/* ── col: VALUE ──────────────────────────────────── */}
-      <div className="px-3 py-2.5 w-28 flex-shrink-0">
-        <div className={colLabelCls}>
-          Value{metricCfg?.unit ? ` (${metricCfg.unit})` : ''}
-        </div>
-        {isCross ? (
-          <div className="flex items-center h-[30px]">
-            <span className="text-[11px] text-accent-blue italic">crossing indicator</span>
-          </div>
-        ) : (
-          <input
-            type="number"
-            value={condition.value ?? ''}
-            onChange={e =>
-              onChange({
-                ...condition,
-                value: e.target.value === '' ? null : Number(e.target.value),
-              })
-            }
-            placeholder="0"
-            className={numCls}
-          />
-        )}
-      </div>
+      {/* RHS: CANDLE metric + timeframe chips */}
+      {rhsType === 'CANDLE' && (
+        <>
+          <select value={condition.rhs_metric || 'CLOSE'} onChange={e => onChange({ ...condition, rhs_metric: e.target.value })} className={chipGreen}>
+            {METRIC_CONFIGS.CANDLE.filter(m => CANDLE_RHS_METRICS.includes(m.value)).map(m => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+          <select value={condition.rhs_timeframe || '15m'} onChange={e => onChange({ ...condition, rhs_timeframe: e.target.value as Timeframe })} className={chipPurple}>
+            {TIMEFRAME_OPTIONS.map(tf => <option key={tf.value} value={tf.value}>{tf.label}</option>)}
+          </select>
+        </>
+      )}
 
-      {/* ── remove ──────────────────────────────────────── */}
-      <div className="flex items-center px-2 border-l border-border-subtle">
-        <button
-          type="button"
-          onClick={onRemove}
-          className="p-1 text-text-muted hover:text-loss transition-colors rounded hover:bg-loss/10"
-          title="Remove condition"
-        >
-          <X size={13} />
-        </button>
-      </div>
+      {/* RHS: INDICATOR chip + source + inline params + timeframe — e.g. EMA of RSI(14) (21) 15min */}
+      {rhsType === 'INDICATOR' && (
+        <>
+          <select value={condition.rhs_metric || 'EMA'} onChange={e => handleRHSIndicatorChange(e.target.value)} className={chipGreen}>
+            {METRIC_CONFIGS.INDICATOR.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+          {/* RHS source — shown when RHS indicator supports source (EMA/SMA).
+               Appears BEFORE params: EMA of M15 Close (21) [15min] */}
+          {rhsCfgInd?.supportsSource && (
+            <>
+              <span className="text-[10px] text-text-muted select-none">of</span>
+              <select
+                value={condition.rhs_source ?? 'CLOSE'}
+                onChange={e => onChange({ ...condition, rhs_source: e.target.value })}
+                className={chipGreen}
+              >
+                {INDICATOR_SOURCE_OPTIONS.map(s => (
+                  <option key={s.value} value={s.value}>
+                    {tfShort(condition.rhs_timeframe)} {s.label}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {rhsCfgInd && rhsCfgInd.params.length > 0 && (
+            <span className="inline-flex items-center gap-0.5 text-[11px] text-text-muted">
+              {'('}
+              {rhsCfgInd.params.map((p, i) => (
+                <span key={p.key} className="inline-flex items-center gap-0.5">
+                  {i > 0 && <span className="mx-0.5">,</span>}
+                  <input
+                    type="number"
+                    value={condition.rhs_params?.[p.key] ?? p.default}
+                    onChange={e => handleRHSParam(p.key, Number(e.target.value))}
+                    min={p.min} max={p.max} step={p.step ?? 1}
+                    title={p.label}
+                    className={paramInput}
+                  />
+                </span>
+              ))}
+              {')'}
+            </span>
+          )}
+          <select value={condition.rhs_timeframe || '15m'} onChange={e => onChange({ ...condition, rhs_timeframe: e.target.value as Timeframe })} className={chipPurple}>
+            {TIMEFRAME_OPTIONS.map(tf => <option key={tf.value} value={tf.value}>{tf.label}</option>)}
+          </select>
+        </>
+      )}
+
+      {/* Remove button — appears on hover */}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="ml-auto p-1 text-text-muted hover:text-loss rounded hover:bg-loss/10 transition-colors opacity-0 group-hover:opacity-100"
+        title="Remove condition"
+      >
+        <X size={12} />
+      </button>
     </div>
   )
 }
 
-// ── Condition group block (recursive) ────────────────────────────────────────
-
-const DEPTH_COLORS = [
-  'border-border-strong',
-  'border-accent-blue/50',
-  'border-accent-purple/50',
-]
+// ── Condition group block — Chartink-style ────────────────────────────────────
 
 interface GroupBlockProps {
   group:        ConditionGroup
@@ -319,121 +416,110 @@ function GroupBlock({
   onRemove,
   depth = 0,
 }: GroupBlockProps) {
-  const borderColor = DEPTH_COLORS[Math.min(depth, 2)]
-
   const toggleOp = () =>
     onChange({ ...group, op: group.op === 'AND' ? 'OR' : 'AND' })
-
-  // ── condition CRUD ─────────────────────────────────────────────────────────
 
   const updateCondition = (idx: number, c: Condition) => {
     const conditions = [...group.conditions]
     conditions[idx] = c
     onChange({ ...group, conditions })
   }
-
   const removeCondition = (idx: number) =>
     onChange({ ...group, conditions: group.conditions.filter((_, i) => i !== idx) })
-
   const addCondition = (scope: ConditionScope = 'STRATEGY') =>
-    onChange({
-      ...group,
-      conditions: [...group.conditions, defaultCondition(scope)],
-    })
-
-  // ── sub-group CRUD ─────────────────────────────────────────────────────────
+    onChange({ ...group, conditions: [...group.conditions, defaultCondition(scope)] })
 
   const updateNestedGroup = (idx: number, g: ConditionGroup) => {
     const groups = [...group.groups]
     groups[idx] = g
     onChange({ ...group, groups })
   }
-
   const removeNestedGroup = (idx: number) =>
     onChange({ ...group, groups: group.groups.filter((_, i) => i !== idx) })
-
   const addNestedGroup = () =>
     onChange({ ...group, groups: [...group.groups, defaultGroup()] })
 
-  // ── total items (to know when to show connectors) ──────────────────────────
-
   const totalItems = group.conditions.length + group.groups.length
 
-  return (
-    <div
-      className={cn(
-        'rounded-lg border-l-2 pl-3 pr-1 py-3 space-y-0',
-        borderColor,
-        depth > 0 ? 'bg-surface-3/20 mt-1' : ''
-      )}
-    >
-      {/* sub-group header */}
-      {depth > 0 && (
-        <div className="flex items-center gap-2 mb-2 -mt-1">
-          <span className="text-[9px] text-text-muted uppercase tracking-widest font-semibold">
-            Sub-group
-          </span>
-          {onRemove && (
-            <button
-              type="button"
-              onClick={onRemove}
-              className="ml-auto p-0.5 text-text-muted hover:text-loss transition-colors"
-              title="Remove group"
-            >
-              <Trash2 size={11} />
-            </button>
-          )}
-        </div>
-      )}
+  const borderCls =
+    depth === 0 ? 'border-border-strong' :
+    depth === 1 ? 'border-accent-blue/40' :
+    'border-accent-purple/40'
 
-      {/* conditions */}
-      {group.conditions.map((cond, i) => (
-        <div key={cond.id}>
-          {i > 0 && <AndOrConnector op={group.op} onClick={toggleOp} />}
+  return (
+    <div className={cn('rounded-lg border overflow-hidden', borderCls)}>
+
+      {/* ── Chartink-style group header ─────────────────── */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-surface-3/60 border-b border-border-subtle">
+        {depth > 0 && (
+          <span className="text-[10px] text-text-muted uppercase tracking-widest font-semibold">Sub-group</span>
+        )}
+        <span className="text-xs text-text-secondary">Passes</span>
+        {/* ALL / ANY toggle — click to switch */}
+        <button
+          type="button"
+          onClick={toggleOp}
+          title="Click to toggle ALL / ANY"
+          className={cn(
+            'px-2.5 py-0.5 text-xs font-bold rounded-full border transition-colors',
+            group.op === 'AND'
+              ? 'bg-accent-blue/15 border-accent-blue/40 text-accent-blue hover:bg-accent-blue/25'
+              : 'bg-accent-amber/15 border-accent-amber/40 text-accent-amber hover:bg-accent-amber/25'
+          )}
+        >
+          {group.op === 'AND' ? 'ALL' : 'ANY'}
+        </button>
+        <span className="text-xs text-text-secondary">of the following conditions</span>
+        {onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="ml-auto p-1 text-text-muted hover:text-loss transition-colors"
+            title="Remove sub-group"
+          >
+            <Trash2 size={11} />
+          </button>
+        )}
+      </div>
+
+      {/* ── Conditions list ──────────────────────────────── */}
+      <div className="p-3 space-y-2 bg-surface-1">
+
+        {group.conditions.map((cond, i) => (
           <ConditionCard
+            key={cond.id}
             condition={cond}
             positionLegs={positionLegs}
             onChange={c => updateCondition(i, c)}
             onRemove={() => removeCondition(i)}
           />
-        </div>
-      ))}
+        ))}
 
-      {/* nested groups */}
-      {group.groups.map((sub, i) => (
-        <div key={sub.id}>
-          {(group.conditions.length > 0 || i > 0) && (
-            <AndOrConnector op={group.op} onClick={toggleOp} />
-          )}
+        {group.groups.map((sub, i) => (
           <GroupBlock
+            key={sub.id}
             group={sub}
             positionLegs={positionLegs}
             onChange={g => updateNestedGroup(i, g)}
             onRemove={() => removeNestedGroup(i)}
             depth={depth + 1}
           />
-        </div>
-      ))}
+        ))}
 
-      {/* empty state */}
-      {totalItems === 0 && (
-        <div className="text-xs text-text-muted py-2 italic">
-          No conditions — click below to add one.
-        </div>
-      )}
+        {totalItems === 0 && (
+          <div className="text-xs text-text-muted italic text-center py-3">
+            No conditions yet — add one below.
+          </div>
+        )}
 
-      {/* add buttons */}
-      <div className="flex items-center gap-4 pt-3 mt-1 border-t border-border-subtle">
-        {/* Quick-add scope buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[9px] text-text-muted uppercase tracking-widest font-semibold">
-            Add:
-          </span>
+        {/* ── Add buttons ─────────────────────────────────── */}
+        <div className="flex items-center gap-1.5 flex-wrap pt-1.5 mt-1 border-t border-border-subtle">
+          <span className="text-[10px] text-text-muted uppercase tracking-widest font-semibold mr-1">+ Add:</span>
           {(
             [
               { scope: 'STRATEGY'  as ConditionScope, label: 'Strategy'  },
               { scope: 'LEG'       as ConditionScope, label: 'Leg'       },
-              { scope: 'SPOT'      as ConditionScope, label: 'Spot'      },
+              { scope: 'SPOT'      as ConditionScope, label: 'Spot Price' },
               { scope: 'CANDLE'    as ConditionScope, label: 'OHLCV'     },
               { scope: 'INDICATOR' as ConditionScope, label: 'Indicator' },
             ] as const
@@ -442,9 +528,9 @@ function GroupBlock({
               key={scope}
               type="button"
               onClick={() => addCondition(scope)}
-              className="flex items-center gap-1 text-[11px] text-text-muted hover:text-accent-blue border border-border-subtle hover:border-accent-blue/50 rounded px-2 py-0.5 transition-colors"
+              className="inline-flex items-center gap-0.5 text-[11px] text-text-muted hover:text-accent-blue border border-border-subtle hover:border-accent-blue/40 rounded px-2 py-0.5 transition-colors"
             >
-              <Plus size={10} />
+              <Plus size={9} />
               {label}
             </button>
           ))}
@@ -452,30 +538,13 @@ function GroupBlock({
             <button
               type="button"
               onClick={addNestedGroup}
-              className="flex items-center gap-1 text-[11px] text-text-muted hover:text-accent-purple border border-border-subtle hover:border-accent-purple/50 rounded px-2 py-0.5 transition-colors"
+              className="inline-flex items-center gap-0.5 text-[11px] text-text-muted hover:text-accent-purple border border-border-subtle hover:border-accent-purple/40 rounded px-2 py-0.5 transition-colors"
             >
-              <Plus size={10} />
-              Sub-group ( )
+              <Plus size={9} />
+              Sub-group
             </button>
           )}
         </div>
-
-        {/* Show current group op badge */}
-        {totalItems > 1 && (
-          <button
-            type="button"
-            onClick={toggleOp}
-            className={cn(
-              'ml-auto flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full border transition-colors',
-              group.op === 'AND'
-                ? 'border-accent-blue/40 text-accent-blue bg-accent-blue/10 hover:bg-accent-blue/20'
-                : 'border-accent-amber/40 text-accent-amber bg-accent-amber/10 hover:bg-accent-amber/20'
-            )}
-            title="Toggle group operator"
-          >
-            All using {group.op}
-          </button>
-        )}
       </div>
     </div>
   )
@@ -591,17 +660,11 @@ export function AlertRuleBuilder({
 
       {/* ── Condition builder ────────────────────────────────────────────── */}
       <div className="px-5 py-4 space-y-3">
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <span className={cn(colLabelCls, 'mb-0')}>Conditions</span>
-            <span className="text-[10px] text-text-muted">
-              (click{' '}
-              <span className="font-bold text-accent-blue">AND</span>
-              {' / '}
-              <span className="font-bold text-accent-amber">OR</span>
-              {' '}connector to toggle)
-            </span>
-          </div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className={cn(colLabelCls, 'mb-0')}>Conditions</span>
+          <span className="text-[10px] text-text-muted">
+            Click <span className="font-bold text-accent-blue">ALL</span> / <span className="font-bold text-accent-amber">ANY</span> in the header to toggle the group operator
+          </span>
         </div>
 
         <GroupBlock

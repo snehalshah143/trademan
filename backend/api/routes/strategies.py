@@ -62,11 +62,14 @@ class LegCreate(BaseModel):
     option_type: Optional[str] = None
     strike: Optional[float] = None
     expiry: Optional[str] = None
+    entry_price: Optional[float] = None
 
 
 class StrategyCreate(BaseModel):
+    id: Optional[str] = None          # client-provided UUID — preserves frontend ID
     name: str
     description: Optional[str] = None
+    status: Optional[str] = None
     underlying: Optional[str] = None
     expiry: Optional[str] = None
     legs: List[LegCreate] = []
@@ -106,13 +109,57 @@ async def list_strategies(db: AsyncSession = Depends(get_db)):
 
 @router.post("", response_model=StrategyOut, status_code=status.HTTP_201_CREATED)
 async def create_strategy(body: StrategyCreate, db: AsyncSession = Depends(get_db)):
+    import json as _json
+
+    # Use client-provided UUID if given — this ensures the frontend's strategy ID
+    # matches what the backend and alert engine use (prevents UUID mismatch).
+    try:
+        strategy_id = uuid.UUID(body.id) if body.id else uuid.uuid4()
+    except (ValueError, AttributeError):
+        strategy_id = uuid.uuid4()
+
+    # Idempotent: if a strategy with this ID already exists just return it
+    existing_res = await db.execute(
+        select(Strategy).options(selectinload(Strategy.legs)).where(Strategy.id == strategy_id)
+    )
+    existing = existing_res.scalar_one_or_none()
+    if existing is not None:
+        return existing
+
     strategy = Strategy(
+        id=strategy_id,
         name=body.name,
         description=body.description,
+        status=body.status or "active",
         underlying=body.underlying,
         expiry=body.expiry,
     )
-    for leg_data in body.legs:
+
+    # Build legs — explicit legs list takes priority
+    legs_to_create = body.legs
+
+    # If no explicit legs, parse them from the description JSON (frontend saves full strategy blob)
+    if not legs_to_create and body.description:
+        try:
+            desc = _json.loads(body.description)
+            for fl in desc.get("legs", []):
+                inst = fl.get("instrument", {})
+                inst_type = inst.get("instrumentType", "")
+                # Only set option_type for CE/PE/FUT — not for EQ
+                opt_type = inst_type if inst_type in ("CE", "PE", "FUT") else None
+                legs_to_create.append(LegCreate(
+                    symbol=inst.get("symbol", ""),
+                    action=fl.get("side", "BUY"),
+                    quantity=int(fl.get("quantity", 1)),
+                    option_type=opt_type,
+                    strike=inst.get("strike"),
+                    expiry=inst.get("expiry"),
+                    entry_price=fl.get("entryPrice"),
+                ))
+        except Exception:
+            pass
+
+    for leg_data in legs_to_create:
         strategy.legs.append(
             StrategyLeg(
                 symbol=leg_data.symbol,
@@ -121,13 +168,15 @@ async def create_strategy(body: StrategyCreate, db: AsyncSession = Depends(get_d
                 option_type=leg_data.option_type,
                 strike=leg_data.strike,
                 expiry=leg_data.expiry,
+                entry_price=leg_data.entry_price,
+                status="filled",
             )
         )
+
     db.add(strategy)
     await db.flush()
-    await db.refresh(strategy)
-    # Re-fetch with legs loaded
-    return await _get_or_404(strategy.id, db)
+    # Re-fetch with legs eagerly loaded
+    return await _get_or_404(strategy_id, db)
 
 
 @router.get("/{strategy_id}", response_model=StrategyOut)

@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
 import { Layers } from 'lucide-react'
 import axios from 'axios'
 import { useLivePositions } from '@hooks/useLivePositions'
@@ -7,6 +6,7 @@ import { useBrokerPositions } from '@hooks/useBrokerPositions'
 import { useAlertStore } from '@store/alertStore'
 import { useLTPStore } from '@store/ltpStore'
 import { useStrategyStore } from '@store/strategyStore'
+import type { Strategy } from '@/types/domain'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { StrategyRow } from './StrategyRow'
 import { BrokerPositionsTable } from './BrokerPositionsTable'
@@ -15,10 +15,11 @@ import { fmtINRCompact, profitLossClass, cn } from '@/lib/utils'
 type Tab = 'strategies' | 'broker'
 
 export function PositionManager() {
-  const strategies  = useLivePositions()
-  const unreadCount = useAlertStore((s) => s.unreadCount)
-  const updateBatch = useLTPStore((s) => s.updateBatch)
+  const strategies    = useLivePositions()
+  const unreadCount   = useAlertStore((s) => s.unreadCount)
+  const updateBatch   = useLTPStore((s) => s.updateBatch)
   const allStrategies = useStrategyStore((s) => s.strategies)
+  const addStrategy   = useStrategyStore((s) => s.addStrategy)
 
   // Sync broker position LTPs into ltpStore so strategy tab stays consistent
   // even before WS subscription kicks in (5s polling fallback)
@@ -37,6 +38,23 @@ export function PositionManager() {
         }))
     )
   }, [brokerPositions])
+
+  // On mount: if localStorage was cleared, recover strategies from backend DB
+  useEffect(() => {
+    if (allStrategies.length > 0) return  // store is healthy, nothing to do
+    axios.get<Array<{ description?: string | null }>>('/api/v1/strategies')
+      .then(r => {
+        for (const row of r.data) {
+          if (!row.description) continue
+          try {
+            const s = JSON.parse(row.description) as Strategy
+            if (!s?.id || !s?.name || !Array.isArray(s?.legs)) continue
+            addStrategy(s)
+          } catch { /* skip malformed rows */ }
+        }
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // On mount: tell backend to subscribe all strategy leg symbols for real-time WS ticks
   useEffect(() => {
@@ -107,13 +125,7 @@ export function PositionManager() {
             <div className="flex flex-col items-center justify-center h-full py-24 text-center">
               <Layers size={40} className="text-text-muted mb-4 opacity-40" />
               <p className="text-text-secondary text-sm mb-2">No active strategies</p>
-              <p className="text-text-muted text-xs mb-6">Go to Strategy Builder to create one</p>
-              <Link
-                to="/builder"
-                className="px-4 py-2 text-sm font-medium bg-accent-blue hover:bg-blue-500 text-white rounded-md transition-colors"
-              >
-                Open Strategy Builder
-              </Link>
+              <p className="text-text-muted text-xs">Group broker positions to create a strategy.</p>
             </div>
           ) : (
             <>

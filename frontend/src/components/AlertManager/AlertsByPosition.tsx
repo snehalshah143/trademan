@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, ToggleLeft, ToggleRight, Edit2, Trash2, RotateCcw, ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { Plus, ToggleLeft, ToggleRight, Edit2, Trash2, RotateCcw, ChevronDown, ChevronRight, Search, Check } from 'lucide-react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { toast } from 'react-hot-toast'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,26 @@ import { AlertList } from './AlertList'
 import { buildPreviewText } from '@/types/alertRules'
 import type { AlertRuleBuilderData } from '@/types/alertRules'
 import { useStrategyStore } from '@store/strategyStore'
+
+// ── Persist custom display names for alert groups (survives store resets) ─────
+
+const NAMES_KEY = 'trademan-alert-group-names'
+
+function useGroupNames() {
+  const [names, setNamesState] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem(NAMES_KEY) ?? '{}') } catch { return {} }
+  })
+  const setName = (id: string, name: string) => {
+    setNamesState(prev => {
+      const next = { ...prev, [id]: name }
+      localStorage.setItem(NAMES_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+  return { names, setName }
+}
+
+// ── ────────────────────────────────────────────────────────────────────────────
 
 const SCOPE_BADGE: Record<string, string> = {
   STRATEGY: 'bg-accent-blue/20 text-accent-blue border-accent-blue/30',
@@ -154,30 +174,75 @@ interface PositionGroupProps {
   underlyingSymbol?: string
   rules: AlertRuleBuilderData[]
   positionLegs: Array<{ leg_id: string; symbol: string; side: 'BUY' | 'SELL' }>
+  onRename: (name: string) => void
 }
 
-function PositionGroup({ strategyId, strategyName, underlyingSymbol, rules, positionLegs }: PositionGroupProps) {
-  const [expanded, setExpanded] = useState(true)
-  const [listOpen, setListOpen] = useState(false)
+function PositionGroup({ strategyId, strategyName, underlyingSymbol, rules, positionLegs, onRename }: PositionGroupProps) {
+  const [expanded,  setExpanded ] = useState(true)
+  const [listOpen,  setListOpen ] = useState(false)
+  const [editing,   setEditing  ] = useState(false)
+  const [draftName, setDraftName] = useState(strategyName)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Keep draft in sync if prop changes from outside
+  useEffect(() => { if (!editing) setDraftName(strategyName) }, [strategyName, editing])
+
+  // Focus input when editing starts
+  useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
+
+  const commitRename = () => {
+    const trimmed = draftName.trim()
+    if (trimmed && trimmed !== strategyName) onRename(trimmed)
+    else setDraftName(strategyName)
+    setEditing(false)
+  }
 
   return (
     <div className="border border-border-subtle rounded-lg overflow-hidden">
       {/* Header */}
       <div
         className="flex items-center justify-between px-4 py-3 bg-surface-2 cursor-pointer hover:bg-surface-3 transition-colors"
-        onClick={() => setExpanded(e => !e)}
+        onClick={() => { if (!editing) setExpanded(e => !e) }}
       >
-        <div className="flex items-center gap-2">
-          {expanded ? <ChevronDown size={13} className="text-text-muted" /> : <ChevronRight size={13} className="text-text-muted" />}
-          <span className="text-sm font-semibold text-text-primary">{strategyName}</span>
-          {underlyingSymbol && <span className="text-xs text-text-muted">{underlyingSymbol}</span>}
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-3 text-text-muted border border-border-subtle">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {expanded ? <ChevronDown size={13} className="text-text-muted shrink-0" /> : <ChevronRight size={13} className="text-text-muted shrink-0" />}
+
+          {/* Inline name edit */}
+          {editing ? (
+            <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+              <input
+                ref={inputRef}
+                value={draftName}
+                onChange={e => setDraftName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setDraftName(strategyName); setEditing(false) } }}
+                onBlur={commitRename}
+                className="text-sm font-semibold bg-surface-3 border border-accent-blue rounded px-2 py-0.5 text-text-primary focus:outline-none w-48"
+              />
+              <button onClick={commitRename} className="p-0.5 text-profit hover:text-profit/80 transition-colors" title="Save">
+                <Check size={13} />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-sm font-semibold text-text-primary truncate">{strategyName}</span>
+              <button
+                onClick={e => { e.stopPropagation(); setEditing(true) }}
+                className="p-0.5 text-text-muted hover:text-text-primary transition-colors shrink-0"
+                title="Rename"
+              >
+                <Edit2 size={11} />
+              </button>
+            </div>
+          )}
+
+          {underlyingSymbol && <span className="text-xs text-text-muted shrink-0">{underlyingSymbol}</span>}
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-3 text-text-muted border border-border-subtle shrink-0">
             {rules.length} alert{rules.length !== 1 ? 's' : ''}
           </span>
         </div>
         <button
           onClick={e => { e.stopPropagation(); setListOpen(true) }}
-          className="flex items-center gap-1 px-2 py-1 text-[11px] text-accent-blue border border-accent-blue/40 rounded hover:bg-accent-blue/10 transition-colors"
+          className="flex items-center gap-1 px-2 py-1 text-[11px] text-accent-blue border border-accent-blue/40 rounded hover:bg-accent-blue/10 transition-colors shrink-0 ml-2"
         >
           <Plus size={11} />
           Add Alert
@@ -222,6 +287,7 @@ function PositionGroup({ strategyId, strategyName, underlyingSymbol, rules, posi
 export function AlertsByPosition() {
   const [search, setSearch] = useState('')
   const strategies = useStrategyStore(s => s.strategies)
+  const { names: customNames, setName } = useGroupNames()
 
   // Fetch all rules at once
   const { data: allRules = [], isLoading } = useQuery({
@@ -230,9 +296,51 @@ export function AlertsByPosition() {
     staleTime: 10_000,
   })
 
-  const filtered = strategies.filter(s =>
-    s.name.toLowerCase().includes(search.toLowerCase()) ||
-    (s.underlyingSymbol ?? '').toLowerCase().includes(search.toLowerCase())
+  // Build groups from allRules (backend source of truth) — this ensures alerts
+  // are visible even if the strategy is no longer in the Zustand store
+  const strategyIdsWithAlerts = [...new Set(allRules.map(r => r.strategy_id))]
+
+  const groupsWithAlerts = strategyIdsWithAlerts.map(strategyId => {
+    const storeStrategy  = strategies.find(s => s.id === strategyId)
+    // Name priority: Zustand store → custom name saved by user → fallback ID
+    const strategyName =
+      storeStrategy?.name ??
+      customNames[strategyId] ??
+      `Strategy ${strategyId.slice(0, 8)}…`
+    return {
+      strategyId,
+      strategyName,
+      underlyingSymbol: storeStrategy?.underlyingSymbol,
+      rules:            allRules.filter(r => r.strategy_id === strategyId),
+      positionLegs:     storeStrategy?.legs.map(l => ({
+        leg_id: l.id,
+        symbol: l.instrument.symbol,
+        side:   l.side,
+      })) ?? [],
+    }
+  })
+
+  // Also include strategies from the store that have no alerts yet
+  const withAlertsSet = new Set(strategyIdsWithAlerts)
+  const groupsNoAlerts = strategies
+    .filter(s => !withAlertsSet.has(s.id))
+    .map(s => ({
+      strategyId:       s.id,
+      strategyName:     s.name,
+      underlyingSymbol: s.underlyingSymbol,
+      rules:            [] as AlertRuleBuilderData[],
+      positionLegs:     s.legs.map(l => ({
+        leg_id: l.id,
+        symbol: l.instrument.symbol,
+        side:   l.side,
+      })),
+    }))
+
+  const allGroups = [...groupsWithAlerts, ...groupsNoAlerts]
+
+  const filtered = allGroups.filter(g =>
+    g.strategyName.toLowerCase().includes(search.toLowerCase()) ||
+    (g.underlyingSymbol ?? '').toLowerCase().includes(search.toLowerCase())
   )
 
   return (
@@ -252,28 +360,21 @@ export function AlertsByPosition() {
         <div className="text-center py-12 text-xs text-text-muted">Loading…</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 text-xs text-text-muted">
-          {search ? 'No positions match your search.' : 'No active positions.'}
+          {search ? 'No positions match your search.' : 'No positions or alerts found.'}
         </div>
       ) : (
         <div className="space-y-3">
-          {filtered.map(strategy => {
-            const rules = allRules.filter(r => r.strategy_id === strategy.id)
-            const positionLegs = strategy.legs.map(l => ({
-              leg_id: l.id,
-              symbol: l.instrument.symbol,
-              side: l.side,
-            }))
-            return (
-              <PositionGroup
-                key={strategy.id}
-                strategyId={strategy.id}
-                strategyName={strategy.name}
-                underlyingSymbol={strategy.underlyingSymbol}
-                rules={rules}
-                positionLegs={positionLegs}
-              />
-            )
-          })}
+          {filtered.map(g => (
+            <PositionGroup
+              key={g.strategyId}
+              strategyId={g.strategyId}
+              strategyName={g.strategyName}
+              underlyingSymbol={g.underlyingSymbol}
+              rules={g.rules}
+              positionLegs={g.positionLegs}
+              onRename={name => setName(g.strategyId, name)}
+            />
+          ))}
         </div>
       )}
     </div>

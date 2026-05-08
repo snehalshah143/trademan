@@ -34,13 +34,28 @@ class AlertEngine:
         logger.info("[AlertEngine] started")
 
     async def _load_strategy_legs(self) -> None:
-        """Cache active strategy legs keyed by symbol for fast tick lookup."""
+        """
+        Cache active strategy legs keyed by symbol for fast tick lookup.
+
+        Two-pass approach to handle UUID mismatch between frontend and backend:
+        Pass 1 — standard: load StrategyLeg rows joined to Strategy table.
+        Pass 2 — fallback: for any strategy_id referenced in alert rules that has
+                 NO legs after pass 1, try to parse legs from strategies.description
+                 JSON blob (frontend stores full Strategy object there including legs).
+        """
+        import json as _json
+        import uuid as _uuid
         from core.database import AsyncSessionLocal
         from models.relational import Strategy, StrategyLeg
+        from alerts.models import AlertRuleBuilder
         from sqlalchemy import select
+
+        self._strategy_legs = {}
+        self._symbol_index  = {}
 
         try:
             async with AsyncSessionLocal() as db:
+                # ── Pass 1: standard DB join ──────────────────────────────────
                 result = await db.execute(
                     select(StrategyLeg).join(Strategy).where(
                         Strategy.status.in_(["active", "draft"])
@@ -48,27 +63,100 @@ class AlertEngine:
                 )
                 legs = result.scalars().all()
 
-            self._strategy_legs = {}
-            self._symbol_index  = {}
+                for leg in legs:
+                    sid = str(leg.strategy_id)
+                    sym = leg.symbol
+                    if sid not in self._strategy_legs:
+                        self._strategy_legs[sid] = []
+                    self._strategy_legs[sid].append({
+                        "leg_id":      str(leg.id),
+                        "symbol":      sym,
+                        "action":      leg.action,
+                        "entry_price": leg.entry_price or 0.0,
+                        "quantity":    leg.quantity,
+                    })
+                    if sym not in self._symbol_index:
+                        self._symbol_index[sym] = []
+                    if sid not in self._symbol_index[sym]:
+                        self._symbol_index[sym].append(sid)
 
-            for leg in legs:
-                sid = str(leg.strategy_id)
-                sym = leg.symbol
+                # ── Pass 2: fallback for mismatched UUIDs ─────────────────────
+                # Get all strategy_ids referenced by active alert rules
+                arb_res = await db.execute(
+                    select(AlertRuleBuilder.strategy_id)
+                    .where(AlertRuleBuilder.is_active == True)  # noqa: E712
+                    .distinct()
+                )
+                alert_sids = {str(r[0]) for r in arb_res.fetchall()}
 
-                if sid not in self._strategy_legs:
-                    self._strategy_legs[sid] = []
-                self._strategy_legs[sid].append({
-                    "leg_id":       str(leg.id),
-                    "symbol":       sym,
-                    "action":       leg.action,
-                    "entry_price":  leg.entry_price or 0.0,
-                    "quantity":     leg.quantity,
-                })
+                # Find ones that have no legs yet
+                missing_sids = alert_sids - set(self._strategy_legs.keys())
+                if not missing_sids:
+                    return
 
-                if sym not in self._symbol_index:
-                    self._symbol_index[sym] = []
-                if sid not in self._symbol_index[sym]:
-                    self._symbol_index[sym].append(sid)
+                # For each missing sid, search strategies table:
+                # (a) direct id match — happens going-forward after the fix
+                # (b) description JSON contains the frontend UUID — legacy data
+                strat_res = await db.execute(
+                    select(Strategy).where(Strategy.status.in_(["active", "draft"]))
+                )
+                all_strategies = strat_res.scalars().all()
+
+                for sid in missing_sids:
+                    legs_data: list[dict] = []
+
+                    # (a) direct match
+                    strat = next((s for s in all_strategies if str(s.id) == sid), None)
+
+                    # (b) description JSON id match (legacy UUID mismatch case)
+                    if strat is None:
+                        for s in all_strategies:
+                            if not s.description:
+                                continue
+                            try:
+                                desc = _json.loads(s.description)
+                                if str(desc.get("id", "")) == sid:
+                                    strat = s
+                                    break
+                            except Exception:
+                                continue
+
+                    if strat is None:
+                        continue
+
+                    # Extract legs from description JSON
+                    if strat.description:
+                        try:
+                            desc = _json.loads(strat.description)
+                            for fl in desc.get("legs", []):
+                                inst = fl.get("instrument", {})
+                                sym  = inst.get("symbol", "")
+                                if not sym:
+                                    continue
+                                legs_data.append({
+                                    "leg_id":      fl.get("id", str(_uuid.uuid4())),
+                                    "symbol":      sym,
+                                    "action":      fl.get("side", "BUY"),
+                                    "entry_price": fl.get("entryPrice") or 0.0,
+                                    "quantity":    int(fl.get("quantity", 1)),
+                                })
+                        except Exception as exc:
+                            logger.warning("[AlertEngine] description parse error for %s: %s", sid, exc)
+
+                    if not legs_data:
+                        continue
+
+                    self._strategy_legs[sid] = legs_data
+                    for leg_d in legs_data:
+                        sym = leg_d["symbol"]
+                        if sym not in self._symbol_index:
+                            self._symbol_index[sym] = []
+                        if sid not in self._symbol_index[sym]:
+                            self._symbol_index[sym].append(sid)
+                    logger.info(
+                        "[AlertEngine] fallback: loaded %d legs for strategy %s from description JSON",
+                        len(legs_data), sid,
+                    )
 
         except Exception as exc:
             logger.warning("[AlertEngine] leg load failed: %s", exc)

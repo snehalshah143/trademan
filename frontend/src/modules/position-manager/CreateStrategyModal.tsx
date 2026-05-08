@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { X, FolderPlus } from 'lucide-react'
+import axios from 'axios'
 import { useStrategyStore } from '@store/strategyStore'
 import { parseSymbol, extractUnderlying } from '@/lib/symbolParser'
 import { cn, profitLossClass } from '@/lib/utils'
@@ -83,6 +84,19 @@ export function CreateStrategyModal({ open, onOpenChange, positions, onCreated }
     }
 
     addStrategy(strategy)
+
+    // Persist to backend DB — send the frontend-generated UUID as `id` so the
+    // alert engine and backend both reference the same strategy ID.
+    // Backend parses legs from description JSON and creates StrategyLeg rows.
+    axios.post('/api/v1/strategies', {
+      id:          strategy.id,              // ← preserve frontend UUID
+      name:        strategy.name,
+      description: JSON.stringify(strategy), // full strategy JSON + legs
+      status:      'active',
+      underlying:  strategy.underlyingSymbol ?? null,
+      expiry:      strategy.underlyingExpiry   ?? null,
+    }).catch(() => {}) // fire-and-forget — UI doesn't depend on this
+
     setCustomName('')
     onOpenChange(false)
     onCreated?.()

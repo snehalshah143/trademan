@@ -33,7 +33,8 @@ export function useLivePositions(): LiveStrategy[] {
     return activeStrategies.map((strategy) => {
       const enrichedLegs: LiveLeg[] = strategy.legs.map((leg) => {
         const symbol = leg.instrument.symbol
-        const ltp = ltpMap[symbol]?.tick.ltp ?? leg.currentLTP ?? leg.entryPrice ?? 0
+        // Use || not ?? so that 0 values fall through to the next fallback
+        const ltp = ltpMap[symbol]?.tick.ltp || leg.currentLTP || leg.entryPrice || 0
         const entryPrice = leg.entryPrice ?? 0
         const sideMult = leg.side === 'BUY' ? 1 : -1
         const legMTM = sideMult * (ltp - entryPrice) * leg.quantity
