@@ -34,6 +34,38 @@ _STATUS_MAP: Dict[str, str] = {
 
 _RECONNECT_DELAY = 5.0      # seconds before WS reconnect attempt
 
+# Exchange heuristic — OpenAlgo WS requires exchange per symbol in subscribe payload.
+_MCX_PREFIXES = (
+    "CRUDEOIL", "GOLD", "SILVER", "NATURALGAS", "COPPER",
+    "ALUMINUM", "ZINC", "LEAD", "NICKEL", "MENTHAOIL",
+)
+_NSE_CASH = ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY")
+
+
+def _symbol_exchange(symbol: str) -> str:
+    """Derive exchange from symbol name for WS subscription payload."""
+    su = symbol.upper()
+    if any(su.startswith(p) for p in _MCX_PREFIXES):
+        return "MCX"
+    if su in _NSE_CASH:
+        return "NSE"
+    return "NFO"
+
+
+async def _ws_send_subscribe(ws_conn, symbols: List[str]) -> None:
+    """
+    Send a subscribe message.
+    OpenAlgo WS expects symbols as a list of {exchange, symbol} dicts —
+    sending plain strings causes a SERVER_ERROR on the OpenAlgo side.
+    """
+    payload = [{"exchange": _symbol_exchange(s), "symbol": s} for s in symbols]
+    await ws_conn.send(json.dumps({
+        "action":  "subscribe",
+        "symbols": payload,
+        "mode":    "LTP",
+    }))
+    logger.warning("[OpenAlgoAdapter] subscribed %d symbols: %s", len(symbols), payload)
+
 
 class OpenAlgoAdapter(BrokerAdapter):
     """
@@ -127,12 +159,8 @@ class OpenAlgoAdapter(BrokerAdapter):
         self._ws_symbols.extend(new)
         if self._ws_conn is not None:
             try:
-                await self._ws_conn.send(json.dumps({
-                    "action":  "subscribe",
-                    "symbols": new,
-                    "mode":    "ltp",
-                }))
-                logger.info("[OpenAlgoAdapter] subscribed %d new symbols via live WS", len(new))
+                await _ws_send_subscribe(self._ws_conn, new)
+                logger.info("[OpenAlgoAdapter] subscribed %d new symbols via live WS: %s", len(new), new)
             except Exception as exc:
                 logger.warning("[OpenAlgoAdapter] subscribe_symbols send error: %s", exc)
 
@@ -185,18 +213,35 @@ class OpenAlgoAdapter(BrokerAdapter):
         while True:
             try:
                 async with websockets.connect(uri, ping_interval=20) as ws:
-                    self._ws_connected = True
                     self._ws_conn = ws
-                    logger.info("[OpenAlgoAdapter] WS connected to %s", uri)
+                    logger.warning("[OpenAlgoAdapter] WS connected to %s", uri)
 
-                    # Send subscription message
+                    # Step 1: Authenticate before subscribing
+                    await ws.send(json.dumps({
+                        "action": "authenticate",
+                        "apikey": self._config.api_key,
+                    }))
+
+                    # Step 2: Wait for auth response
+                    auth_raw = await ws.recv()
+                    auth_data = json.loads(auth_raw)
+                    if auth_data.get("status") != "success":
+                        logger.warning(
+                            "[OpenAlgoAdapter] WS auth failed: %s — will reconnect", auth_data
+                        )
+                        self._ws_conn = None
+                        await asyncio.sleep(_RECONNECT_DELAY)
+                        continue
+
+                    self._ws_connected = True
+                    logger.warning("[OpenAlgoAdapter] WS authenticated OK")
+
+                    # Step 3: Subscribe — grouped by exchange so OpenAlgo routes
+                    # MCX commodities to the correct broker stream.
                     if self._ws_symbols:
-                        await ws.send(json.dumps({
-                            "action":  "subscribe",
-                            "symbols": self._ws_symbols,
-                            "mode":    "ltp",
-                        }))
+                        await _ws_send_subscribe(ws, self._ws_symbols)
 
+                    # Step 4: Read tick stream
                     async for raw in ws:
                         try:
                             data = json.loads(raw)
@@ -221,22 +266,46 @@ class OpenAlgoAdapter(BrokerAdapter):
 
     @staticmethod
     def _normalise_tick(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Map OpenAlgo WS tick to our internal format.  Returns None if not a tick."""
+        """
+        Map OpenAlgo WS tick to our internal format.  Returns None if not a tick.
+
+        Fyers via OpenAlgo sends market_data in nested format:
+          {"type":"market_data","symbol":"X","data":{"ltp":100,...}}
+        Legacy/mock format is flat:
+          {"symbol":"X","ltp":100}
+        """
+        # Only process market_data events; skip subscribe confirmations etc.
+        if data.get("type") and data["type"] != "market_data":
+            return None
+
         symbol = data.get("symbol") or data.get("tk")
         if not symbol:
             return None
-        ltp_raw = data.get("ltp") or data.get("last_price") or data.get("lp")
+
+        # Nested (Fyers) format has LTP inside data["data"]
+        inner = data.get("data") or {}
+        ltp_raw = (
+            inner.get("ltp")
+            or inner.get("last_price")
+            or inner.get("lp")
+            or data.get("ltp")
+            or data.get("last_price")
+            or data.get("lp")
+        )
         if ltp_raw is None:
             return None
         try:
             ltp = float(ltp_raw)
         except (TypeError, ValueError):
             return None
+
+        change = float(inner.get("change", 0.0) or data.get("change", 0.0) or 0.0)
+        ts = data.get("ts") or inner.get("timestamp") or datetime.now(timezone.utc).isoformat()
         return {
             "symbol": symbol,
             "ltp":    ltp,
-            "change": float(data.get("change", 0.0) or 0.0),
-            "ts":     data.get("ts") or datetime.now(timezone.utc).isoformat(),
+            "change": change,
+            "ts":     str(ts),
         }
 
     # ── Order management ──────────────────────────────────────────────────────

@@ -22,6 +22,26 @@ async def notify(rule: dict, ctx: dict) -> None:
     spot = ctx.get("spot", 0.0)
     message = f"{name} triggered | MTM: {mtm:.0f} | Spot: {spot:.0f}"
 
+    # ── Persist AlertEvent to DB (powers alert history endpoint) ───────────────
+    try:
+        import uuid as _uuid
+        from core.database import AsyncSessionLocal
+        from models.relational import AlertEvent
+        async with AsyncSessionLocal() as _db:
+            _event = AlertEvent(
+                id=_uuid.uuid4(),
+                strategy_id=_uuid.UUID(strategy_id) if strategy_id else None,
+                rule_id=alert_id,
+                symbol=ctx.get("underlying") or None,
+                message=message,
+                severity="warning",
+                dismissed=False,
+            )
+            _db.add(_event)
+            await _db.commit()
+    except Exception as exc:
+        logger.warning("[notify] AlertEvent persist failed: %s", exc)
+
     # ── WebSocket popup ────────────────────────────────────────────────────────
     if rule.get("notify_popup"):
         try:

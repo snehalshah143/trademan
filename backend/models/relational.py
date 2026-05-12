@@ -80,7 +80,7 @@ class Strategy(Base):
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(String(10000), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=StrategyStatus.DRAFT)
     underlying: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     expiry: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)

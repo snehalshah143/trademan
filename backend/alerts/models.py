@@ -19,12 +19,16 @@ class AlertRuleBuilder(Base):
     alert_id: Mapped[str] = mapped_column(
         sa.String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    strategy_id: Mapped[str] = mapped_column(
+    strategy_id: Mapped[str | None] = mapped_column(
         sa.String(36),
-        sa.ForeignKey("strategies.id", ondelete="CASCADE"),
-        nullable=False,
+        sa.ForeignKey("strategies.id", ondelete="SET NULL"),
+        nullable=True,   # SET NULL on PostgreSQL; SQLite keeps dangling ref
         index=True,
     )
+    # Preserved when strategy is deleted — lets the UI show "was for <name>"
+    strategy_name: Mapped[str | None] = mapped_column(sa.String(200), nullable=True)
+    # void=True means the strategy was deleted; alert is kept for history only
+    void: Mapped[bool] = mapped_column(sa.Boolean, default=False, nullable=False)
     name: Mapped[str] = mapped_column(sa.String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(sa.String(1000), nullable=True)
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, nullable=False)

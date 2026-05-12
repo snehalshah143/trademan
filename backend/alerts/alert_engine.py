@@ -30,8 +30,9 @@ class AlertEngine:
     async def start(self) -> None:
         await alert_cache.reload()
         await self._load_strategy_legs()
+        await self._subscribe_symbols()
         self._loaded = True
-        logger.info("[AlertEngine] started")
+        logger.info("[AlertEngine] started, watching %d symbols", len(self._symbol_index))
 
     async def _load_strategy_legs(self) -> None:
         """
@@ -161,10 +162,23 @@ class AlertEngine:
         except Exception as exc:
             logger.warning("[AlertEngine] leg load failed: %s", exc)
 
+    async def _subscribe_symbols(self) -> None:
+        """Ensure LTPService is subscribed to every symbol used by alert rules."""
+        symbols = list(self._symbol_index.keys())
+        if not symbols:
+            return
+        try:
+            from services.ltp.ltp_service import ltp_service
+            await ltp_service.add_symbols(symbols)
+            logger.info("[AlertEngine] subscribed symbols: %s", symbols)
+        except Exception as exc:
+            logger.warning("[AlertEngine] symbol subscribe failed: %s", exc)
+
     async def reload(self) -> None:
         """Called after alert CRUD operations to refresh cache."""
         await alert_cache.reload()
         await self._load_strategy_legs()
+        await self._subscribe_symbols()
 
     # ── Tick handler ───────────────────────────────────────────────────────────
 

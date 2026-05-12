@@ -76,31 +76,56 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
             return None
 
     elif scope == "INDICATOR":
-        # Indicators are keyed by metric + timeframe in the context for multi-TF support
         timeframe  = condition.get("timeframe") or "15m"
         indicators = ctx.get("indicators", {})
-        # Try keyed lookup first: "{METRIC}_{TF}" e.g. "RSI_15m"
-        keyed = indicators.get(f"{metric}_{timeframe}")
-        if keyed is not None:
-            return float(keyed)
-        # Fall back to flat key (legacy / simple setup)
-        simple_keys = {
-            "RSI":        "rsi",
-            "SUPERTREND": "supertrend",
-            "EMA":        "ema",
-            "SMA":        "sma",
-            "MACD_HIST":  "macd_hist",
-            "BB_UPPER":   "bb_upper",
-            "BB_LOWER":   "bb_lower",
-            "VWAP":       "vwap",
-            "ATR":        "atr",
-            "ADX":        "adx",
-            "STOCH_K":    "stoch_k",
-            "EMA_CROSS":  "ema_cross",  # legacy
-        }
-        flat_key = simple_keys.get(metric, metric.lower())
-        val = indicators.get(flat_key)
-        return float(val) if val is not None else None
+
+        # Extract period from params (frontend sends list [14] or dict {"period": 14})
+        raw_params = condition.get("params")
+        period: int | None = None
+        if isinstance(raw_params, list) and raw_params:
+            try:
+                period = int(raw_params[0])
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(raw_params, dict):
+            try:
+                period = int(raw_params.get("period", raw_params.get("0", 0)) or 0) or None
+            except (TypeError, ValueError):
+                pass
+
+        # For EMA/SMA of another indicator (e.g. EMA of RSI(14) period 9)
+        source = condition.get("lhs_source", "CLOSE")
+        if metric in ("EMA", "SMA") and source and source.upper() not in ("CLOSE", ""):
+            # Chained: source might be "RSI" or "RSI_14"
+            src_parts = source.upper().split("_")
+            src_name  = src_parts[0]
+            src_per   = src_parts[1] if len(src_parts) > 1 else "14"
+            if period:
+                key = f"{metric}_{src_name}_{period}_{src_per}_{timeframe}"
+            else:
+                key = f"{metric}_{src_name}_{src_per}_{timeframe}"
+        elif period:
+            key = f"{metric}_{period}_{timeframe}"
+        else:
+            key = f"{metric}_{timeframe}"
+
+        val = indicators.get(key)
+        if val is not None:
+            return float(val)
+
+        # Fallback: try without period (for metrics that don't have one, e.g. MACD_HIST, VWAP)
+        fallback_key = f"{metric}_{timeframe}"
+        val = indicators.get(fallback_key)
+        if val is not None:
+            return float(val)
+
+        # Final fallback: case-insensitive flat key (legacy)
+        metric_lower = metric.lower()
+        for k, v in indicators.items():
+            if k.lower().startswith(metric_lower):
+                return float(v)
+
+        return None
 
     elif scope == "CANDLE":
         # OHLCV candle data — keyed as "candles:{timeframe}" in ctx

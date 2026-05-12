@@ -47,9 +47,17 @@ async def _start_redis_ws_bridge() -> None:
 
         symbol = tick.get("symbol", "")
         if symbol:
+            # Route tick to symbol-partitioned alert pipeline (event-driven,
+            # non-blocking — enqueues into the correct worker's asyncio.Queue)
             try:
-                from alerts.alert_engine import alert_engine as _ae
-                await _ae.on_tick(symbol, ltp)
+                from alerts.alert_pipeline import alert_pipeline as _ap
+                ts_raw = tick.get("ts")
+                try:
+                    from datetime import datetime, timezone
+                    ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now(timezone.utc)
+                except (ValueError, TypeError):
+                    ts = datetime.now(timezone.utc)
+                _ap.route_tick(symbol, ltp, ts)
             except Exception:
                 pass
             try:
@@ -83,8 +91,9 @@ async def lifespan(app: FastAPI):
 
     await _start_redis_ws_bridge()
 
-    from alerts.alert_engine import alert_engine
-    await alert_engine.start()
+    # Start symbol-partitioned alert pipeline (replaces alert_engine.on_tick)
+    from alerts.alert_pipeline import alert_pipeline
+    await alert_pipeline.start()
 
     from monitors.monitor_engine import monitor_engine
     await monitor_engine.start()
@@ -136,6 +145,9 @@ async def lifespan(app: FastAPI):
 
     from services.mtm_tracker import mtm_tracker as _mtm
     await _mtm.stop()
+
+    from alerts.alert_pipeline import alert_pipeline as _ap
+    await _ap.stop()
 
     from services.ltp.ltp_service import ltp_service as _ltp
     await _ltp.stop()

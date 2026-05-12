@@ -29,7 +29,9 @@ class ConditionIn(BaseModel):
     operator: str
     value: float | None = None
     leg_id: str | None = None
-    params: dict = {}
+    timeframe: str | None = None
+    lhs_source: str | None = None
+    params: list | dict = []     # frontend sends list e.g. [14] for RSI period
 
 
 class ConditionGroupIn(BaseModel):
@@ -43,7 +45,7 @@ ConditionGroupIn.model_rebuild()
 
 
 class AlertRuleBuilderIn(BaseModel):
-    strategy_id: str
+    strategy_id: str | None = None
     name: str
     description: str | None = None
     is_active: bool = True
@@ -63,7 +65,9 @@ class AlertRuleBuilderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     alert_id: str
-    strategy_id: str
+    strategy_id: str | None
+    strategy_name: str | None
+    void: bool
     name: str
     description: str | None
     is_active: bool
@@ -89,6 +93,7 @@ class AlertRuleBuilderOut(BaseModel):
 async def list_alert_rules(
     strategy_id: Optional[str] = Query(default=None),
     is_active: Optional[bool] = Query(default=None),
+    include_void: bool = Query(default=False, description="Include alerts whose strategy was deleted"),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(AlertRuleBuilder).order_by(AlertRuleBuilder.created_at)
@@ -96,6 +101,8 @@ async def list_alert_rules(
         stmt = stmt.where(AlertRuleBuilder.strategy_id == strategy_id)
     if is_active is not None:
         stmt = stmt.where(AlertRuleBuilder.is_active == is_active)
+    if not include_void:
+        stmt = stmt.where(AlertRuleBuilder.void == False)  # noqa: E712
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -105,10 +112,26 @@ async def create_alert_rule(
     body: AlertRuleBuilderIn,
     db: AsyncSession = Depends(get_db),
 ):
-    row = AlertRuleBuilder(
-        alert_id=str(uuid.uuid4()),
-        **body.model_dump(),
-    )
+    # Snapshot strategy name at creation time so it survives strategy deletion
+    strategy_name: str | None = None
+    if body.strategy_id:
+        import uuid as _uuid
+        from models.relational import Strategy
+        try:
+            _strat_uuid = _uuid.UUID(body.strategy_id)
+        except (ValueError, AttributeError):
+            _strat_uuid = None
+        if _strat_uuid:
+            strat_res = await db.execute(
+                select(Strategy).where(Strategy.id == _strat_uuid)
+            )
+            strat = strat_res.scalar_one_or_none()
+            if strat:
+                strategy_name = strat.name
+
+    data = body.model_dump()
+    data["strategy_name"] = strategy_name
+    row = AlertRuleBuilder(alert_id=str(uuid.uuid4()), **data)
     db.add(row)
     await db.commit()
     await db.refresh(row)
@@ -502,7 +525,7 @@ async def create_from_template(
 
 async def _reload_engine() -> None:
     try:
-        from alerts.alert_engine import alert_engine
-        await alert_engine.reload()
+        from alerts.alert_pipeline import alert_pipeline
+        await alert_pipeline.reload()
     except Exception as exc:
         logger.warning("[alert_rules] engine reload failed: %s", exc)
