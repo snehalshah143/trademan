@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
-const OA_BASE = 'http://127.0.0.1:5000'
+// Reads via Trademan backend (/api/v1/oa-portfolio) which queries OA's SQLite
+// file directly — no CORS, no OA session needed.
 
 export interface OAPortfolioLeg {
   segment: 'OPTION' | 'FUTURE'
@@ -33,14 +34,14 @@ export function useOpenAlgoPortfolio() {
   return useQuery<OAPortfolioEntry[]>({
     queryKey: ['oa-portfolio'],
     queryFn: async () => {
-      const res = await fetch(`${OA_BASE}/api/strategy-portfolio`, {
-        credentials: 'include',
-      })
-      if (!res.ok) throw new Error(`OpenAlgo portfolio: ${res.status}`)
+      const res = await fetch('/api/v1/oa-portfolio')
+      if (!res.ok) throw new Error(`oa-portfolio: ${res.status}`)
       const data = await res.json()
+      if (data.status === 'unconfigured') throw new Error('OPENALGO_DB_PATH not set')
       return (data.items ?? []) as OAPortfolioEntry[]
     },
     staleTime: 15_000,
+    refetchInterval: 30_000,
     refetchOnWindowFocus: true,
     retry: false,
   })

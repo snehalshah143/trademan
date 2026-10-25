@@ -36,6 +36,14 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
             # Return absolute drawdown value so user can write "MAX_LOSS >= 3000"
             v = ctx.get("max_loss", abs(min(mtm, 0.0)))
             return abs(v)
+        if metric == "NET_DELTA":
+            return ctx.get("net_delta")
+        if metric == "NET_GAMMA":
+            return ctx.get("net_gamma")
+        if metric == "NET_THETA":
+            return ctx.get("net_theta")
+        if metric == "NET_VEGA":
+            return ctx.get("net_vega")
 
     elif scope == "LEG":
         if not leg_id:
@@ -59,6 +67,14 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
             side = ctx.get("leg_sides", {}).get(leg_id, "BUY")
             mult = 1 if side == "BUY" else -1
             return mult * (ltp - entry) * qty
+        if metric == "LEG_DELTA":
+            return ctx.get("leg_deltas", {}).get(leg_id)
+        if metric == "LEG_GAMMA":
+            return ctx.get("leg_gammas", {}).get(leg_id)
+        if metric == "LEG_THETA":
+            return ctx.get("leg_thetas", {}).get(leg_id)
+        if metric == "LEG_VEGA":
+            return ctx.get("leg_vegas", {}).get(leg_id)
 
     elif scope == "SPOT":
         spot = ctx.get("spot", 0.0)
@@ -93,17 +109,39 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
             except (TypeError, ValueError):
                 pass
 
-        # For EMA/SMA of another indicator (e.g. EMA of RSI(14) period 9)
-        source = condition.get("lhs_source", "CLOSE")
-        if metric in ("EMA", "SMA") and source and source.upper() not in ("CLOSE", ""):
-            # Chained: source might be "RSI" or "RSI_14"
-            src_parts = source.upper().split("_")
-            src_name  = src_parts[0]
-            src_per   = src_parts[1] if len(src_parts) > 1 else "14"
-            if period:
-                key = f"{metric}_{src_name}_{period}_{src_per}_{timeframe}"
+        # ── MACD_HIST / MACD_LINE / MACD_SIGNAL: key includes fast_slow_signal ─
+        if metric in ("MACD_HIST", "MACD_LINE", "MACD_SIGNAL"):
+            if isinstance(raw_params, dict):
+                _fast   = int(raw_params.get("fast",   12))
+                _slow   = int(raw_params.get("slow",   26))
+                _signal = int(raw_params.get("signal",  9))
             else:
-                key = f"{metric}_{src_name}_{src_per}_{timeframe}"
+                _fast, _slow, _signal = 12, 26, 9
+            key = f"{metric}_{_fast}_{_slow}_{_signal}_{timeframe}"
+
+        # ── SUPERTREND: key includes period_factor*10 ─────────────────────────
+        elif metric == "SUPERTREND":
+            if isinstance(raw_params, dict):
+                _st_p = int(raw_params.get("period", 10))
+                _st_f = float(raw_params.get("factor", 3.0))
+            else:
+                _st_p, _st_f = 10, 3.0
+            key = f"SUPERTREND_{_st_p}_{round(_st_f * 10)}_{timeframe}"
+
+        # ── EMA/SMA of another indicator (e.g. EMA of RSI(14) period 9) ──────
+        elif metric in ("EMA", "SMA"):
+            source = condition.get("lhs_source", "CLOSE")
+            if source and source.upper() not in ("CLOSE", ""):
+                src_parts = source.upper().split("_")
+                src_name  = src_parts[0]
+                src_per   = src_parts[1] if len(src_parts) > 1 else "14"
+                key = f"{metric}_{src_name}_{period}_{src_per}_{timeframe}" if period \
+                      else f"{metric}_{src_name}_{src_per}_{timeframe}"
+            elif period:
+                key = f"{metric}_{period}_{timeframe}"
+            else:
+                key = f"{metric}_{timeframe}"
+
         elif period:
             key = f"{metric}_{period}_{timeframe}"
         else:
@@ -128,12 +166,12 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
         return None
 
     elif scope == "CANDLE":
-        # OHLCV candle data — keyed as "candles:{timeframe}" in ctx
         timeframe = condition.get("timeframe") or "15m"
-        # ctx["candles"] is expected to be dict[timeframe, dict[field, value]]
-        # e.g. {"15m": {"open": 24100, "high": 24250, "low": 24050, "close": 24200, "volume": 123456}}
-        candles = ctx.get("candles", {})
-        candle  = candles.get(timeframe, {})
+        # Prefer closed_candles (last completed candle) so that CROSS operators
+        # compare consecutive closed-candle values rather than consecutive ticks.
+        # Fall back to live "candles" dict if no closed candle exists yet.
+        candle = ctx.get("closed_candles", {}).get(timeframe) \
+              or ctx.get("candles", {}).get(timeframe, {})
 
         field_map = {
             "OPEN":          "open",
@@ -176,6 +214,42 @@ def _resolve_value(condition: dict, ctx: dict) -> float | None:
     return None
 
 
+def _resolve_rhs(condition: dict, ctx: dict) -> float | None:
+    """
+    Resolve the right-hand side comparison value.
+    Handles all rhs_type values: NUMBER, SPOT, CANDLE, INDICATOR.
+    """
+    rhs_type = condition.get("rhs_type") or "NUMBER"
+
+    if rhs_type == "NUMBER":
+        val = condition.get("value")
+        return float(val) if val is not None else None
+
+    if rhs_type == "SPOT":
+        return _resolve_value({
+            "scope":  "SPOT",
+            "metric": condition.get("rhs_metric") or "SPOT_PRICE",
+        }, ctx)
+
+    if rhs_type == "CANDLE":
+        return _resolve_value({
+            "scope":     "CANDLE",
+            "metric":    condition.get("rhs_metric") or "CLOSE",
+            "timeframe": condition.get("rhs_timeframe") or "15m",
+        }, ctx)
+
+    if rhs_type == "INDICATOR":
+        return _resolve_value({
+            "scope":      "INDICATOR",
+            "metric":     condition.get("rhs_metric") or "EMA",
+            "timeframe":  condition.get("rhs_timeframe") or "15m",
+            "params":     condition.get("rhs_params") or {},
+            "lhs_source": condition.get("rhs_source") or "CLOSE",
+        }, ctx)
+
+    return None
+
+
 def evaluate_condition(
     condition: dict,
     ctx: dict,
@@ -183,7 +257,6 @@ def evaluate_condition(
 ) -> bool:
     """Evaluate a single condition leaf."""
     operator = condition.get("operator", "GTE")
-    threshold = condition.get("value")
 
     current = _resolve_value(condition, ctx)
     if current is None:
@@ -192,18 +265,49 @@ def evaluate_condition(
     if operator == "CROSS_ABOVE":
         prev = _resolve_value(condition, prev_ctx)
         if prev is None:
+            logger.debug("CROSS_ABOVE: prev=None scope=%s metric=%s tf=%s",
+                         condition.get("scope"), condition.get("metric"), condition.get("timeframe"))
             return False
-        ref = threshold if threshold is not None else 0.0
-        return prev < ref <= current
+        ref_curr = _resolve_rhs(condition, ctx)
+        ref_prev = _resolve_rhs(condition, prev_ctx)
+        if ref_curr is None and ref_prev is None:
+            logger.debug("CROSS_ABOVE: ref=None rhs_type=%s rhs_metric=%s tf=%s",
+                         condition.get("rhs_type"), condition.get("rhs_metric"), condition.get("rhs_timeframe"))
+            return False
+        r_prev = ref_prev if ref_prev is not None else ref_curr
+        r_curr = ref_curr if ref_curr is not None else ref_prev
+        # "crosses above": prev was STRICTLY below the level, current is STRICTLY above it.
+        # prev < level  AND  current > level
+        fired = prev < r_prev and current > r_curr
+        logger.debug("CROSS_ABOVE: prev=%.4f r_prev=%.4f current=%.4f r_curr=%.4f fired=%s",
+                     prev, r_prev, current, r_curr, fired)
+        return fired
 
     if operator == "CROSS_BELOW":
         prev = _resolve_value(condition, prev_ctx)
         if prev is None:
+            logger.debug("CROSS_BELOW: prev=None scope=%s metric=%s tf=%s",
+                         condition.get("scope"), condition.get("metric"), condition.get("timeframe"))
             return False
-        ref = threshold if threshold is not None else 0.0
-        return prev > ref >= current
+        ref_curr = _resolve_rhs(condition, ctx)
+        ref_prev = _resolve_rhs(condition, prev_ctx)
+        if ref_curr is None and ref_prev is None:
+            logger.debug("CROSS_BELOW: ref=None rhs_type=%s rhs_metric=%s tf=%s",
+                         condition.get("rhs_type"), condition.get("rhs_metric"), condition.get("rhs_timeframe"))
+            return False
+        r_prev = ref_prev if ref_prev is not None else ref_curr
+        r_curr = ref_curr if ref_curr is not None else ref_prev
+        # "crosses below": prev was STRICTLY above the level, current is STRICTLY below it.
+        # prev > level  AND  current < level
+        fired = prev > r_prev and current < r_curr
+        logger.debug("CROSS_BELOW: prev=%.4f r_prev=%.4f current=%.4f r_curr=%.4f fired=%s",
+                     prev, r_prev, current, r_curr, fired)
+        return fired
 
-    if threshold is None:
+    ref = _resolve_rhs(condition, ctx)
+    if ref is None:
+        logger.debug("operator=%s ref=None (indicator not ready) rhs_type=%s rhs_metric=%s",
+                     operator, condition.get("rhs_type"), condition.get("rhs_metric"))
         return False
 
     op_fn = _OPS.get(operator)
@@ -212,7 +316,7 @@ def evaluate_condition(
         return False
 
     try:
-        return op_fn(float(current), float(threshold))
+        return op_fn(float(current), float(ref))
     except (TypeError, ValueError):
         return False
 

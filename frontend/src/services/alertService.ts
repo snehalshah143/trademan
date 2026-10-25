@@ -32,6 +32,55 @@ export interface AlertTemplate {
   preview: string[]
 }
 
+// ── DB-backed user-defined templates ─────────────────────────────────────────
+
+export interface AlertTemplateAlert {
+  name: string
+  description?: string | null
+  is_active: boolean
+  trigger_once: boolean
+  cooldown_secs: number
+  notify_popup: boolean
+  notify_telegram: boolean
+  notify_email: boolean
+  notify_webhook: boolean
+  notify_sound: boolean
+  webhook_url?: string | null
+  telegram_chat_id?: string | null
+  condition_tree: object
+}
+
+export interface AlertTemplateDB {
+  template_id: string
+  name: string
+  description: string | null
+  alerts: AlertTemplateAlert[]
+  created_at: string
+  updated_at: string
+}
+
+const TMPL_BASE = '/api/v1/alert-templates'
+
+export const alertTemplateService = {
+  list: () =>
+    axios.get<AlertTemplateDB[]>(TMPL_BASE).then(r => r.data),
+
+  create: (data: { name: string; description?: string; alerts: AlertTemplateAlert[] }) =>
+    axios.post<AlertTemplateDB>(TMPL_BASE, data).then(r => r.data),
+
+  update: (id: string, data: { name: string; description?: string; alerts: AlertTemplateAlert[] }) =>
+    axios.put<AlertTemplateDB>(`${TMPL_BASE}/${id}`, data).then(r => r.data),
+
+  delete: (id: string) =>
+    axios.delete(`${TMPL_BASE}/${id}`),
+
+  apply: (templateId: string, strategyId: string, legOverrides?: Record<string, string>) =>
+    axios.post<{ created: number }>(`${TMPL_BASE}/${templateId}/apply`, {
+      strategy_id:   strategyId,
+      leg_overrides: legOverrides,
+    }).then(r => r.data),
+}
+
 export const alertRuleService = {
   list: (strategyId: string) =>
     axios.get<AlertRuleBuilderData[]>(BASE, { params: { strategy_id: strategyId } })

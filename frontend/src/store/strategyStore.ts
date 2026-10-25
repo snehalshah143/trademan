@@ -64,7 +64,8 @@ export const useStrategyStore = create<StrategyState>()(
 
       removeStrategy: (id: string) => {
         set((state) => {
-          state.strategies = state.strategies.filter((s) => s.id !== id)
+          const idx = state.strategies.findIndex((s) => s.id === id)
+          if (idx !== -1) state.strategies.splice(idx, 1)
           if (state.selectedStrategyId === id) {
             state.selectedStrategyId = null
           }

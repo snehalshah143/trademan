@@ -4,7 +4,7 @@ import * as Switch from '@radix-ui/react-switch'
 import { X, ChevronDown, ChevronUp } from 'lucide-react'
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, isValid } from 'date-fns'
 import { useStrategyStore } from '@store/strategyStore'
 import { useLTPStore } from '@store/ltpStore'
 import { fmtPrice, cn } from '@/lib/utils'
@@ -29,7 +29,11 @@ interface AlertConfigModalProps {
 
 function legLabel(leg: StrategyLeg) {
   const { instrument, lots } = leg
-  const expStr = instrument.expiry ? format(parseISO(instrument.expiry), 'dd MMM') : ''
+  let expStr = ''
+  if (instrument.expiry) {
+    const parsed = parseISO(instrument.expiry)
+    expStr = isValid(parsed) ? format(parsed, 'dd MMM') : instrument.expiry
+  }
   const strikeStr = instrument.strike != null ? String(instrument.strike) : ''
   return `${expStr} ${strikeStr} ${instrument.instrumentType} × ${lots}`.trim()
 }

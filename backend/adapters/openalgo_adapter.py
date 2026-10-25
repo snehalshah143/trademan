@@ -190,6 +190,42 @@ class OpenAlgoAdapter(BrokerAdapter):
                 logger.warning("[OpenAlgoAdapter] get_ltp error for %s: %s", symbol, exc)
         return out
 
+    async def get_history(
+        self,
+        symbol: str,
+        exchange: str,
+        interval: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical OHLCV candles via POST /api/v1/history.
+        Returns list of {"date", "open", "high", "low", "close", "volume"}.
+        interval: "1m", "3m", "5m", "15m", "75m", "1d" etc.
+        """
+        if not self._client:
+            return []
+        try:
+            resp = await self._client.post(
+                "/api/v1/history",
+                json={
+                    "apikey":     self._config.api_key,
+                    "symbol":     symbol,
+                    "exchange":   exchange,
+                    "interval":   interval,
+                    "start_date": start_date,
+                    "end_date":   end_date,
+                },
+                timeout=30.0,
+            )
+            data = resp.json()
+            if data.get("status") == "success":
+                return data.get("data", [])
+            logger.warning("[OpenAlgoAdapter] get_history failed: %s", data.get("message"))
+        except Exception as exc:
+            logger.warning("[OpenAlgoAdapter] get_history error %s %s: %s", symbol, interval, exc)
+        return []
+
     async def subscribe_ws(
         self,
         callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]],

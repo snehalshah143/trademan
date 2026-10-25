@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { ChevronDown, ChevronRight, Bell, ShieldAlert, X, Trash2 } from 'lucide-react'
 import { fmtINRCompact, profitLossClass, cn } from '@/lib/utils'
 import { ExpiryGroup } from './ExpiryGroup'
@@ -9,7 +9,7 @@ import { AlertList } from '@/components/AlertManager/AlertList'
 import type { LiveStrategy } from '@hooks/useLivePositions'
 import type { AlertSeverity } from '@/types/domain'
 import { useAlertStore } from '@store/alertStore'
-import { useStrategyStore } from '@store/strategyStore'
+import { useStrategyGreeks } from '@hooks/useStrategyGreeks'
 
 interface Props {
   strategy:    LiveStrategy
@@ -17,16 +17,18 @@ interface Props {
   onCheck:     (legId: string, checked: boolean) => void
   onSelect:    (id: string | null) => void
   isSelected:  boolean
+  onRemove:    (id: string) => void
 }
 
-export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
+export function StrategyRow({ strategy, onSelect, isSelected, onRemove }: Props) {
   const [expanded,       setExpanded]       = useState(false)
   const [alertOpen,      setAlertOpen]      = useState(false)
   const [exitOpen,       setExitOpen]       = useState(false)
   const [rulesOpen,      setRulesOpen]      = useState(false)
   const [confirmRemove,  setConfirmRemove]  = useState(false)
 
-  const removeStrategy = useStrategyStore((s) => s.removeStrategy)
+  // Reset delete confirmation if a different strategy gets mapped to this component instance
+  useEffect(() => { setConfirmRemove(false) }, [strategy.id])
 
   const events = useAlertStore((s) => s.events)
   const strategyAlerts = useMemo(
@@ -57,6 +59,15 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
 
   const netPnl = strategy.liveMTM
 
+  const { data: greeksData } = useStrategyGreeks(strategy.id)
+  const legDeltaMap = useMemo<Record<string, number | null>>(() => {
+    if (!greeksData) return {}
+    return Object.fromEntries(
+      greeksData.legs.map((l) => [l.leg_id, l.signed_delta])
+    )
+  }, [greeksData])
+  const netDelta = greeksData?.net_delta ?? null
+
   return (
     <>
       {/* ── Strategy card header ─────────────────────────────── */}
@@ -68,17 +79,18 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
           isSelected ? 'bg-surface-3' : 'bg-surface-2 hover:bg-surface-3'
         )}
         onClick={() => {
+          setConfirmRemove(false)
           if (expanded) {
             setExpanded(false)
-            onSelect(null)           // always deselect on collapse
+            onSelect(null)
           } else {
             setExpanded(true)
-            onSelect(strategy.id)   // select on expand
+            onSelect(strategy.id)
           }
         }}
       >
         {/* Expand icon + name */}
-        <td className="px-4 py-3" colSpan={7}>
+        <td className="px-4 py-3" colSpan={8}>
           <div className="flex items-center gap-2">
             {expanded
               ? <ChevronDown size={14} className="text-text-muted shrink-0" />
@@ -104,6 +116,17 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
                 {netPnl >= 0 ? '+' : ''}{fmtINRCompact(netPnl)}
               </span>
             </div>
+            {netDelta != null && (
+              <div className="flex items-center gap-1 text-xs text-text-muted border-l border-border-subtle pl-3">
+                <span>Δ Net</span>
+                <span className={cn(
+                  'num font-semibold text-sm',
+                  netDelta > 0 ? 'text-profit' : netDelta < 0 ? 'text-loss' : 'text-text-muted'
+                )}>
+                  {netDelta > 0 ? '+' : ''}{netDelta.toFixed(3)}
+                </span>
+              </div>
+            )}
             {/* Action buttons */}
             <div className="flex items-center gap-1">
               <button
@@ -140,7 +163,7 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
                 <div className="flex items-center gap-1 ml-1">
                   <span className="text-[10px] text-text-muted">Remove?</span>
                   <button
-                    onClick={() => removeStrategy(strategy.id)}
+                    onClick={() => onRemove(strategy.id)}
                     className="px-2 py-0.5 text-[10px] font-medium bg-loss text-white rounded transition-colors hover:bg-red-600"
                   >
                     Yes
@@ -172,6 +195,7 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
           <th className="px-3 py-1.5 text-right w-20">Avg Price</th>
           <th className="px-3 py-1.5 text-right w-20">LTP</th>
           <th className="px-3 py-1.5 text-right w-28">P & L</th>
+          <th className="px-3 py-1.5 text-right w-20">Delta</th>
           <th className="px-3 py-1.5 text-center w-12">Exit</th>
         </tr>
       )}
@@ -184,6 +208,7 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
           legs={legs}
           legNumberMap={legNumberMap}
           onExitLeg={() => {/* handled in PositionManager */}}
+          legDeltaMap={legDeltaMap}
         />
       ))}
 
@@ -201,11 +226,20 @@ export function StrategyRow({ strategy, onSelect, isSelected }: Props) {
             <AlertList
               strategyId={strategy.id}
               strategyName={strategy.name}
-              positionLegs={strategy.legs.map((l) => ({
-                leg_id: l.id,
-                symbol: l.instrument.symbol,
-                side:   l.side,
-              }))}
+              positionLegs={[...strategy.legs]
+                .sort((a, b) => {
+                  if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
+                  return a.legIndex - b.legIndex
+                })
+                .map((l, i) => ({
+                  leg_id:     l.id,
+                  symbol:     l.instrument.symbol,
+                  side:       l.side,
+                  legNumber:  i + 1,
+                  strike:     l.instrument.strike ?? null,
+                  optionType: l.instrument.instrumentType,
+                }))
+              }
             />
           </Dialog.Content>
         </Dialog.Portal>

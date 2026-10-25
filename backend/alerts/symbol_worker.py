@@ -42,7 +42,8 @@ import numpy as np
 from core.event_bus import TickEvent, CandleCloseEvent, IndicatorUpdateEvent, AlertFiredEvent
 from services.indicators.calculators import (
     rsi_seed, rsi_step, ema_step, ema_from_series,
-    macd_histogram, atr, bollinger, stochastic, adx, vwap as calc_vwap,
+    macd_full, macd_histogram, atr, bollinger, stochastic, adx, vwap as calc_vwap,
+    supertrend as calc_supertrend,
 )
 from services.indicators.rolling_window import RollingWindow
 from services.indicators.indicator_cache import indicator_cache
@@ -54,12 +55,58 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 IST           = ZoneInfo("Asia/Kolkata")
-MARKET_OPEN   = time(9, 15)
-MARKET_CLOSE  = time(15, 30)
+MARKET_OPEN   = time(9, 0)     # MCX opens at 09:00; NSE at 09:15
+MARKET_CLOSE  = time(23, 30)   # MCX evening session closes at 23:30; NSE at 15:30
 
 # Minute-based timeframes: name → period in minutes
 _MINUTE_TFS: dict[str, int] = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "75m": 75}
 ALL_TIMEFRAMES = ("1m", "3m", "5m", "15m", "75m", "1d")
+
+# ── Dynamic EMA period registry ───────────────────────────────────────────────
+# Always compute these EMA periods; extended by update_required_ema_periods()
+# when alert rules are loaded / reloaded.
+_required_ema_periods: set[int] = {8, 13, 21, 34, 55, 89, 200}
+
+
+def _collect_ema_periods_from_tree(tree: dict, out: set[int]) -> None:
+    """Walk a condition tree and collect all EMA periods referenced (LHS + RHS)."""
+    for cond in tree.get("conditions", []):
+        if isinstance(cond, dict):
+            # LHS indicator
+            if cond.get("scope") == "INDICATOR" and cond.get("metric") == "EMA":
+                p = cond.get("params")
+                if isinstance(p, dict):
+                    try:
+                        out.add(int(p.get("period", 0)))
+                    except (TypeError, ValueError):
+                        pass
+            # RHS indicator
+            if cond.get("rhs_type") == "INDICATOR" and cond.get("rhs_metric") == "EMA":
+                p = cond.get("rhs_params")
+                if isinstance(p, dict):
+                    try:
+                        out.add(int(p.get("period", 0)))
+                    except (TypeError, ValueError):
+                        pass
+    for sub in tree.get("groups", []):
+        _collect_ema_periods_from_tree(sub, out)
+
+
+def update_required_ema_periods(rules: dict[str, list[dict]]) -> None:
+    """
+    Scan all active alert rules and update _required_ema_periods.
+    Call this after alert_cache.reload() completes.
+    """
+    global _required_ema_periods
+    periods: set[int] = {8, 13, 21, 34, 55, 89, 200}  # always-on baseline
+    for rule_list in rules.values():
+        for rule in rule_list:
+            tree = rule.get("condition_tree")
+            if tree:
+                _collect_ema_periods_from_tree(tree, periods)
+    periods.discard(0)
+    _required_ema_periods = periods
+    logger.info("[SymbolWorker] EMA periods registered: %s", sorted(periods))
 
 # ── Candle state (lightweight — only for indicator calculation) ────────────────
 
@@ -76,12 +123,25 @@ class _LiveCandle:
     volume:    int = 0
 
 
-def _candle_bounds(ts_ist: datetime, tf: str) -> tuple[datetime, datetime]:
+_MCX_SYMBOL_PREFIXES = (
+    "CRUDEOIL", "GOLD", "SILVER", "NATURALGAS", "COPPER",
+    "ALUMINUM", "ZINC", "LEAD", "NICKEL", "MENTHAOIL",
+)
+
+
+def _is_mcx_symbol(symbol: str) -> bool:
+    su = symbol.upper()
+    return any(su.startswith(p) for p in _MCX_SYMBOL_PREFIXES)
+
+
+def _candle_bounds(ts_ist: datetime, tf: str, symbol: str = "") -> tuple[datetime, datetime]:
+    # MCX opens at 09:00; NSE opens at 09:15
+    mo_h, mo_m = (9, 0) if _is_mcx_symbol(symbol) else (9, 15)
     if tf == "1d":
-        start = ts_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        start = ts_ist.replace(hour=mo_h, minute=mo_m, second=0, microsecond=0)
         return start, start + timedelta(minutes=375)
     minutes     = _MINUTE_TFS[tf]
-    market_open = ts_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_open = ts_ist.replace(hour=mo_h, minute=mo_m, second=0, microsecond=0)
     delta_secs  = max((ts_ist - market_open).total_seconds(), 0.0)
     idx         = int(delta_secs // (minutes * 60))
     start       = market_open + timedelta(minutes=idx * minutes)
@@ -150,6 +210,10 @@ class SymbolWorker:
         self._windows: dict[tuple[str, str], RollingWindow] = {}
         # symbol → last close (for RSI delta)
         self._last_close: dict[str, float] = {}
+        # (symbol, tf) → last two closed candle snapshots [prev, current]
+        # Used so CANDLE-scope CROSS conditions compare closed-candle-to-closed-candle,
+        # not tick-to-tick (which would always see the same price in prev vs current).
+        self._closed_candle_history: dict[tuple[str, str], list[dict]] = {}
 
     def enqueue(self, event: TickEvent) -> None:
         """Non-blocking.  Called from LTPService tick callback."""
@@ -220,7 +284,7 @@ class SymbolWorker:
         Update candle state.  Returns the closed candle if period rolled over.
         """
         key = (symbol, tf)
-        start, end = _candle_bounds(ts_ist, tf)
+        start, end = _candle_bounds(ts_ist, tf, symbol)
         existing   = self._candles.get(key)
 
         if existing is None:
@@ -248,7 +312,14 @@ class SymbolWorker:
 
     # ── Indicator computation on candle close ─────────────────────────────────
 
-    async def _on_candle_close(self, candle: _LiveCandle) -> None:
+    async def seed_candle(self, candle: _LiveCandle) -> None:
+        """
+        Feed a historical candle into the rolling window and compute indicators
+        WITHOUT triggering alert evaluation.  Called during startup warmup.
+        """
+        await self._on_candle_close(candle, evaluate=False)
+
+    async def _on_candle_close(self, candle: _LiveCandle, evaluate: bool = True) -> None:
         sym = candle.symbol
         tf  = candle.timeframe
         key = (sym, tf)
@@ -266,13 +337,21 @@ class SymbolWorker:
         indicators_updated: list[str] = []
 
         # ── RSI(14) — incremental Wilder's O(1) after seed ───────────────────
+        # On the seeding candle we emit RSI directly from the seed average
+        # (no rsi_step call) to avoid double-counting the last delta.
+        rsi14_just_seeded = False
         if not win.rsi_seeded and n >= 15:
             result = rsi_seed(closes, 14)
             if result:
                 win.rsi_avg_gain, win.rsi_avg_loss = result
                 win.rsi_seeded = True
+                rsi14_just_seeded = True
+                _rs  = win.rsi_avg_gain / win.rsi_avg_loss if win.rsi_avg_loss > 1e-10 else 1e10
+                rsi_val = 100.0 - (100.0 / (1.0 + _rs))
+                win.rsi_values.append(rsi_val)
+                self._emit(sym, tf, "RSI_14", rsi_val, indicators_updated)
 
-        if win.rsi_seeded and n >= 2:
+        if win.rsi_seeded and not rsi14_just_seeded and n >= 2:
             rsi_val, win.rsi_avg_gain, win.rsi_avg_loss = rsi_step(
                 win.rsi_avg_gain, win.rsi_avg_loss,
                 closes[-1], closes[-2], period=14
@@ -280,6 +359,7 @@ class SymbolWorker:
             win.rsi_values.append(rsi_val)
             self._emit(sym, tf, "RSI_14", rsi_val, indicators_updated)
 
+        if win.rsi_seeded:
             # ── EMA(RSI(14), 9) and EMA(RSI(14), 21) ─────────────────────────
             rsi_arr = np.array(win.rsi_values, dtype=np.float64)
             for period, key_name in ((9, "EMA_RSI_9_14"), (21, "EMA_RSI_21_14")):
@@ -292,10 +372,45 @@ class SymbolWorker:
                     win.set_ema_rsi(period, val)
                     self._emit(sym, tf, key_name, val, indicators_updated)
 
-        # ── EMA(Close) for common periods ─────────────────────────────────────
-        for period, ind_name in ((9, "EMA_9"), (21, "EMA_21"), (50, "EMA_50"),
-                                 (200, "EMA_200")):
-            if n < period:
+        # ── RSI(3) — incremental Wilder's, seeds after 3 candles ─────────────
+        rsi3_just_seeded = False
+        if not win.rsi3_seeded and n >= 4:
+            result = rsi_seed(closes, 3)
+            if result:
+                win.rsi3_avg_gain, win.rsi3_avg_loss = result
+                win.rsi3_seeded = True
+                rsi3_just_seeded = True
+                _rs   = win.rsi3_avg_gain / win.rsi3_avg_loss if win.rsi3_avg_loss > 1e-10 else 1e10
+                rsi3_val = 100.0 - (100.0 / (1.0 + _rs))
+                win.rsi3_values.append(rsi3_val)
+                self._emit(sym, tf, "RSI_3", rsi3_val, indicators_updated)
+
+        if win.rsi3_seeded and not rsi3_just_seeded and n >= 2:
+            rsi3_val, win.rsi3_avg_gain, win.rsi3_avg_loss = rsi_step(
+                win.rsi3_avg_gain, win.rsi3_avg_loss,
+                closes[-1], closes[-2], period=3
+            )
+            win.rsi3_values.append(rsi3_val)
+            self._emit(sym, tf, "RSI_3", rsi3_val, indicators_updated)
+
+        if win.rsi3_seeded:
+            # ── EMA(RSI(3), 9) and EMA(RSI(3), 21) ──────────────────────────
+            rsi3_arr = np.array(win.rsi3_values, dtype=np.float64)
+            for period, key_name in ((9, "EMA_RSI_9_3"), (21, "EMA_RSI_21_3")):
+                prev_ema = win.get_ema_rsi3(period)
+                if prev_ema is None and len(rsi3_arr) >= period:
+                    val = ema_from_series(rsi3_arr, period)
+                else:
+                    val = ema_step(rsi3_arr[-1], prev_ema, period) if len(rsi3_arr) >= 1 else None
+                if val is not None:
+                    win.set_ema_rsi3(period, val)
+                    self._emit(sym, tf, key_name, val, indicators_updated)
+
+        # ── EMA(Close) for all required periods (dynamic, not hardcoded) ─────
+        for period in _required_ema_periods:
+            if period <= 0 or n < period:
+                logger.debug("[Worker%d] %s %s EMA_%d not ready: have %d/%d candles",
+                             self.partition_id, sym, tf, period, n, period)
                 continue
             prev_ema = win.get_ema_close(period)
             if prev_ema is None:
@@ -304,17 +419,44 @@ class SymbolWorker:
                 val = ema_step(closes[-1], prev_ema, period)
             if val is not None:
                 win.set_ema_close(period, val)
-                self._emit(sym, tf, ind_name, val, indicators_updated)
+                self._emit(sym, tf, f"EMA_{period}", val, indicators_updated)
 
-        # ── MACD Histogram — full recalc on close (O(N) but only on candle close) ──
-        macd_h = macd_histogram(closes)
-        if macd_h is not None:
-            self._emit(sym, tf, "MACD_HIST", macd_h, indicators_updated)
+        # ── MACD variants — full recalc on close ─────────────────────────────
+        # Emits MACD_LINE, MACD_SIGNAL, MACD_HIST for each param set.
+        # Key format: {TYPE}_{fast}_{slow}_{signal}
+        # Legacy short keys (12-26-9) emitted for backward compat.
+        for _fast, _slow, _signal in (
+            (12, 26, 9),    # standard / default
+            (10, 22, 7),    # user required
+            (5,  11, 3),    # user required
+            (21, 34, 8),    # user required (34-21-8)
+        ):
+            _mc = macd_full(closes, fast=_fast, slow=_slow, signal=_signal)
+            if _mc is not None:
+                _ml, _ms, _mh = _mc
+                _sfx = f"{_fast}_{_slow}_{_signal}"
+                self._emit(sym, tf, f"MACD_LINE_{_sfx}",   _ml, indicators_updated)
+                self._emit(sym, tf, f"MACD_SIGNAL_{_sfx}", _ms, indicators_updated)
+                self._emit(sym, tf, f"MACD_HIST_{_sfx}",   _mh, indicators_updated)
+                if _fast == 12 and _slow == 26 and _signal == 9:
+                    self._emit(sym, tf, "MACD_LINE",   _ml, indicators_updated)
+                    self._emit(sym, tf, "MACD_SIGNAL", _ms, indicators_updated)
+                    self._emit(sym, tf, "MACD_HIST",   _mh, indicators_updated)  # legacy
 
         # ── ATR(14) ────────────────────────────────────────────────────────────
         atr_val = atr(win.highs(), win.lows(), closes, 14)
         if atr_val is not None:
             self._emit(sym, tf, "ATR_14", atr_val, indicators_updated)
+
+        # ── Supertrend variants — full recalc on close ────────────────────────
+        # Key format: SUPERTREND_{period}_{factor*10}  (e.g. SUPERTREND_10_30)
+        # (10, 3.0) is the evaluator default when no params are specified in rule.
+        for _st_period, _st_factor in ((10, 3.0), (11, 2.0), (11, 2.5)):
+            _st_val = calc_supertrend(win.highs(), win.lows(), closes,
+                                      period=_st_period, factor=_st_factor)
+            if _st_val is not None:
+                _fk = round(_st_factor * 10)
+                self._emit(sym, tf, f"SUPERTREND_{_st_period}_{_fk}", _st_val, indicators_updated)
 
         # ── Bollinger Bands(20, 2) ─────────────────────────────────────────────
         bb = bollinger(closes, 20, 2.0)
@@ -339,13 +481,53 @@ class SymbolWorker:
         if vwap_val is not None:
             self._emit(sym, tf, "VWAP", vwap_val, indicators_updated)
 
-        # ── Candle-scope condition evaluation ─────────────────────────────────
-        # Evaluate conditions that depend on this candle's OHLCV
-        await self._evaluate_candle_conditions(sym, tf, candle)
+        # ── Record closed candle (for CROSS detection on CANDLE scope) ──────
+        # Keep the last 2 closed candles per (sym, tf) so that prev_ctx
+        # sees the PREVIOUS closed candle and current_ctx sees THIS one.
+        # Without this, prev_ctx would have the last tick's live close (≈same
+        # price as current close), making CROSS_ABOVE/CROSS_BELOW never fire.
+        _hist = self._closed_candle_history.setdefault((sym, tf), [])
+        _hist.append({
+            "open": candle.open, "high": candle.high,
+            "low":  candle.low,  "close": candle.close,
+            "volume": candle.volume,
+        })
+        if len(_hist) > 2:
+            _hist.pop(0)
 
-        # ── Indicator-scope condition evaluation ──────────────────────────────
-        # Evaluate ONLY the conditions that depend on the changed indicators
-        await self._evaluate_indicator_conditions(sym, tf, indicators_updated)
+        if not evaluate:
+            return   # warmup mode: only seed indicators, skip alert evaluation
+
+        # ── Single merged dispatch per candle close ────────────────────────────
+        # CRITICAL: candle-scope and indicator-scope refs MUST be dispatched in
+        # ONE call so that update_context() is called only ONCE per strategy per
+        # candle close.  If we call _dispatch_refs twice, the second call sees
+        # prev_ctx = NEW indicator values (set by the first call), breaking
+        # CROSS_ABOVE/CROSS_BELOW detection for indicator conditions.
+        #
+        # Dep graph is indexed by underlying (e.g. "CRUDEOIL"), not by the
+        # raw tick symbol (e.g. "CRUDEOIL18JUN26FUT"), so resolve before lookup.
+        query_sym = dep_graph.underlying_for_symbol(sym) or sym
+        all_affected: set[StrategyRef] = set()
+
+        # Candle-scope deps
+        candle_refs = dep_graph.get_candle_affected(query_sym, tf)
+        all_affected.update(candle_refs)
+
+        # Indicator-scope deps (only for indicators that actually changed)
+        for ind_name in indicators_updated:
+            ind_refs = dep_graph.get_indicator_affected(query_sym, tf, ind_name)
+            all_affected.update(ind_refs)
+
+        if all_affected:
+            logger.info(
+                "[Worker%d] candle close %s %s close=%.2f → %d candle refs, "
+                "%d indicator refs, %d unique strategies",
+                self.partition_id, query_sym, tf, candle.close,
+                len(candle_refs), len(all_affected) - len(candle_refs),
+                len({r.strategy_id for r in all_affected}),
+            )
+            await self._dispatch_refs(frozenset(all_affected))
 
         logger.debug("[Worker%d] %s %s close=%.2f → %d indicators updated",
                      self.partition_id, sym, tf, candle.close,
@@ -365,24 +547,6 @@ class SymbolWorker:
         refs = dep_graph.get_price_affected(symbol)
         if refs:
             await self._dispatch_refs(refs)
-
-    async def _evaluate_candle_conditions(self, symbol: str, timeframe: str,
-                                          candle: _LiveCandle) -> None:
-        refs = dep_graph.get_candle_affected(symbol, timeframe)
-        if refs:
-            await self._dispatch_refs(refs)
-
-    async def _evaluate_indicator_conditions(self, symbol: str, timeframe: str,
-                                              indicators_updated: list[str]) -> None:
-        """
-        CORE OPTIMIZATION: only evaluate conditions whose indicator actually changed.
-        RSI updated → only RSI-dependent alerts run. EMA-only alerts are untouched.
-        """
-        affected: set[StrategyRef] = set()
-        for ind_name in indicators_updated:
-            affected.update(dep_graph.get_indicator_affected(symbol, timeframe, ind_name))
-        if affected:
-            await self._dispatch_refs(frozenset(affected))
 
     async def _dispatch_refs(self, refs: frozenset[StrategyRef]) -> None:
         """
@@ -473,17 +637,28 @@ class SymbolWorker:
         Build EvaluationContext entirely from in-memory state.
         Zero Redis reads.  Zero DB queries.  Pure dict lookups.
         """
-        from alerts.alert_pipeline import ltp_mirror, strategy_legs_mirror, strategy_underlying_mirror
+        from alerts.alert_pipeline import ltp_mirror, strategy_legs_mirror, strategy_underlying_mirror, strategy_name_mirror
 
-        legs      = strategy_legs_mirror.get(strategy_id, [])
-        underlying = strategy_underlying_mirror.get(strategy_id, "")
+        legs           = strategy_legs_mirror.get(strategy_id, [])
+        underlying     = strategy_underlying_mirror.get(strategy_id, "")
+        strategy_name  = strategy_name_mirror.get(strategy_id, "")
 
         leg_ltps:         dict[str, float] = {}
         leg_entry_prices: dict[str, float] = {}
         leg_quantities:   dict[str, int]   = {}
         leg_sides:        dict[str, str]   = {}
+        leg_deltas:       dict[str, float] = {}
+        leg_gammas:       dict[str, float] = {}
+        leg_thetas:       dict[str, float] = {}
+        leg_vegas:        dict[str, float] = {}
         total_mtm  = 0.0
         deployed   = 0.0
+        net_delta  = 0.0
+        net_gamma  = 0.0
+        net_theta  = 0.0
+        net_vega   = 0.0
+
+        from services.greeks_service import greeks_cache, is_option
 
         for leg in legs:
             lid   = leg["leg_id"]
@@ -491,6 +666,7 @@ class SymbolWorker:
             entry = leg["entry_price"]
             qty   = leg["quantity"]
             side  = leg["action"]
+            opt   = leg.get("option_type", "")
 
             ltp  = ltp_mirror.get(sym, entry)
             mult = 1 if side == "BUY" else -1
@@ -502,32 +678,79 @@ class SymbolWorker:
             total_mtm             += mult * (ltp - entry) * qty
             deployed              += entry * qty
 
+            # Greeks — only for option legs
+            if is_option(sym, opt):
+                g = greeks_cache.get(sym)
+                if g:
+                    leg_deltas[lid] = g["delta"]
+                    leg_gammas[lid] = g["gamma"]
+                    leg_thetas[lid] = g["theta"]
+                    leg_vegas[lid]  = g["vega"]
+                    net_delta  += mult * g["delta"]
+                    net_gamma  += mult * g["gamma"]
+                    net_theta  += mult * g["theta"]
+                    net_vega   += mult * g["vega"]
+
         spot    = ltp_mirror.get(underlying, ltp_mirror.get(legs[0]["symbol"] if legs else "", 0.0))
         pnl_pct = (total_mtm / deployed * 100.0) if deployed > 0 else 0.0
 
-        # Aggregate all indicator values for the underlying
-        indicators: dict[str, float] = {}
-        if underlying:
-            for tf in ALL_TIMEFRAMES:
-                snap = indicator_cache.snapshot_for_symbol(underlying, tf)
-                for k, v in snap.items():
-                    indicators[f"{k}_{tf}"] = v   # e.g. "RSI_14_15m"
+        # Aggregate all indicator values for the underlying.
+        # For options strategies: underlying="NIFTY", leg="NIFTY25MAY24000CE"
+        #   → indicators built under "NIFTY" (direct index tick feed) ✓
+        # For futures strategies: underlying="CRUDEOIL", leg="CRUDEOIL18JUN26FUT"
+        #   → indicators built under "CRUDEOIL18JUN26FUT" (futures tick feed)
+        #   → underlying lookup returns empty; fall back to leg symbol ✓
+        sym_for_candle = underlying or (legs[0]["symbol"] if legs else "")
+        leg_sym = legs[0]["symbol"] if legs else ""
+        # Build ordered list of candidate symbols (underlying first so it wins
+        # on key collision — e.g. NIFTY beats option CE/PE candles).
+        _lookup_syms: list[str] = []
+        _seen_syms: set[str] = set()
+        for _s in [sym_for_candle, leg_sym]:
+            if _s and _s not in _seen_syms:
+                _lookup_syms.append(_s)
+                _seen_syms.add(_s)
 
-        # Live (unconfirmed) candle data for the underlying
+        indicators: dict[str, float] = {}
+        for _ls in _lookup_syms:
+            for tf in ALL_TIMEFRAMES:
+                snap = indicator_cache.snapshot_for_symbol(_ls, tf)
+                for k, v in snap.items():
+                    key = f"{k}_{tf}"
+                    if key not in indicators:   # first match wins
+                        indicators[key] = v
+
+        # Live (unconfirmed) candle data — try each candidate symbol
         candles: dict[str, dict] = {}
-        for tf in ALL_TIMEFRAMES:
-            lc = self._candles.get((underlying or (legs[0]["symbol"] if legs else ""), tf))
-            if lc:
-                candles[tf] = {
-                    "open":   lc.open,
-                    "high":   lc.high,
-                    "low":    lc.low,
-                    "close":  lc.close,
-                    "volume": lc.volume,
-                }
+        for _ls in _lookup_syms:
+            for tf in ALL_TIMEFRAMES:
+                if tf in candles:
+                    continue
+                lc = self._candles.get((_ls, tf))
+                if lc:
+                    candles[tf] = {
+                        "open":   lc.open,
+                        "high":   lc.high,
+                        "low":    lc.low,
+                        "close":  lc.close,
+                        "volume": lc.volume,
+                    }
+
+        # Most-recently CLOSED candle per timeframe — used by CANDLE-scope
+        # CROSS conditions so consecutive closed-candle closes are compared,
+        # not consecutive ticks (which are nearly identical in price).
+        closed_candles: dict[str, dict] = {}
+        for _ls in _lookup_syms:
+            for tf in ALL_TIMEFRAMES:
+                if tf in closed_candles:
+                    continue
+                hist = self._closed_candle_history.get((_ls, tf), [])
+                if hist:
+                    closed_candles[tf] = hist[-1]
 
         return {
             "strategy_id":      strategy_id,
+            "strategy_name":    strategy_name,
             "underlying":       underlying,
             "mtm":              total_mtm,
             "pnl_pct":          pnl_pct,
@@ -536,7 +759,16 @@ class SymbolWorker:
             "leg_entry_prices": leg_entry_prices,
             "leg_quantities":   leg_quantities,
             "leg_sides":        leg_sides,
+            "leg_deltas":       leg_deltas,
+            "leg_gammas":       leg_gammas,
+            "leg_thetas":       leg_thetas,
+            "leg_vegas":        leg_vegas,
+            "net_delta":        net_delta,
+            "net_gamma":        net_gamma,
+            "net_theta":        net_theta,
+            "net_vega":         net_vega,
             "indicators":       indicators,
             "candles":          candles,
+            "closed_candles":   closed_candles,
             "vwap":             indicator_cache.get(underlying, "15m", "VWAP") or spot,
         }

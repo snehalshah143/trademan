@@ -162,6 +162,12 @@ async def update_alert_rule(
     return row
 
 
+@router.delete("/alert-rules/history", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_alert_history(db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(AlertEvent))
+    await db.commit()
+
+
 @router.delete("/alert-rules/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_alert_rule(
     alert_id: str,
@@ -344,12 +350,6 @@ async def get_alert_history(
         )
         for r in rows
     ]
-
-
-@router.delete("/alert-rules/history", status_code=status.HTTP_204_NO_CONTENT)
-async def clear_alert_history(db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(AlertEvent))
-    await db.commit()
 
 
 # ── Templates ──────────────────────────────────────────────────────────────────

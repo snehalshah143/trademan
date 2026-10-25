@@ -26,6 +26,13 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      // Proxy OpenAlgo directly so the browser never makes a cross-origin request.
+      // All /oa/* calls are forwarded server-side to port 5000 — no CORS issue.
+      '/oa': {
+        target: 'http://127.0.0.1:5000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/oa/, ''),
+      },
     },
   },
 })

@@ -41,6 +41,9 @@ strategy_legs_mirror:        dict[str, list[dict]] = {}
 # strategy_id → underlying symbol (e.g. "NIFTY", "CRUDEOIL")
 strategy_underlying_mirror:  dict[str, str] = {}
 
+# strategy_id → strategy display name
+strategy_name_mirror:        dict[str, str] = {}
+
 
 # ── NotificationWorker ────────────────────────────────────────────────────────
 
@@ -132,6 +135,10 @@ class AlertPipeline:
         # Load alert rules
         await alert_cache.reload()
 
+        # Compute required EMA periods from active rules
+        from alerts.symbol_worker import update_required_ema_periods
+        update_required_ema_periods(dict(alert_cache._rules))
+
         # Load strategy data
         await self._load_strategy_data()
 
@@ -158,6 +165,10 @@ class AlertPipeline:
                 name="notification-worker",
             )
         )
+
+        # Seed workers with today's historical candles so indicators are ready
+        # immediately without waiting 75+ minutes for RSI to warm up.
+        asyncio.create_task(self._warmup_historical_candles(), name="candle-warmup")
 
         self._started = True
         logger.info(
@@ -187,6 +198,10 @@ class AlertPipeline:
         from alerts.dependency_graph import dep_graph
 
         await alert_cache.reload()
+
+        from alerts.symbol_worker import update_required_ema_periods
+        update_required_ema_periods(dict(alert_cache._rules))
+
         await self._load_strategy_data()
 
         dep_graph.rebuild(
@@ -241,6 +256,7 @@ class AlertPipeline:
 
         strategy_legs_mirror.clear()
         strategy_underlying_mirror.clear()
+        strategy_name_mirror.clear()
 
         try:
             async with AsyncSessionLocal() as db:
@@ -286,6 +302,8 @@ class AlertPipeline:
                         sid = str(s.id)
                     if s.underlying:
                         strategy_underlying_mirror[sid] = s.underlying
+                    if s.name:
+                        strategy_name_mirror[sid] = s.name
 
                 # Pass 1.5: remap backend-generated StrategyLeg.id → frontend leg UUIDs
                 #
@@ -383,6 +401,9 @@ class AlertPipeline:
                             )
                             if under:
                                 strategy_underlying_mirror[sid] = under
+                            strat_name = desc.get("name") or strat.name or ""
+                            if strat_name:
+                                strategy_name_mirror[sid] = strat_name
                             logger.info(
                                 "[AlertPipeline] fallback: %d legs for strategy %s",
                                 len(legs_data), sid
@@ -407,6 +428,104 @@ class AlertPipeline:
 
         except Exception as exc:
             logger.warning("[AlertPipeline] strategy data load failed: %s", exc)
+
+
+    async def _warmup_historical_candles(self) -> None:
+        """
+        Fetch today's historical candles from OpenAlgo for every subscribed symbol
+        and feed them through the SymbolWorker rolling windows so indicators
+        (RSI, EMA, Supertrend, …) are ready immediately on startup — no 75-min wait.
+        """
+        from datetime import date, datetime, timezone
+        from zoneinfo import ZoneInfo
+        from adapters.openalgo_adapter import OpenAlgoAdapter, _symbol_exchange
+        from adapters.adapter_factory import get_adapter
+        from alerts.symbol_worker import get_partition, _MINUTE_TFS, _LiveCandle
+
+        IST = ZoneInfo("Asia/Kolkata")
+        today = date.today().isoformat()
+
+        adapter = get_adapter()
+        if not isinstance(adapter, OpenAlgoAdapter):
+            logger.info("[AlertPipeline] warmup skipped: adapter is not OpenAlgo")
+            return
+
+        # Collect unique symbols that have indicator-based alert rules
+        symbols: set[str] = set()
+        for legs in strategy_legs_mirror.values():
+            for leg in legs:
+                symbols.add(leg["symbol"])
+        symbols.update(s for s in strategy_underlying_mirror.values() if s)
+
+        # OpenAlgo-supported interval strings for each internal timeframe.
+        # 75m is not a valid OpenAlgo interval — skip it (indicators still seed
+        # from 15m data which covers the same price action).
+        warmup_tfs = ["1m", "3m", "5m", "15m"]
+
+        logger.info("[AlertPipeline] warming up indicators for %d symbols", len(symbols))
+
+        for sym in symbols:
+            exchange = _symbol_exchange(sym)
+            for tf in warmup_tfs:
+                try:
+                    bars = await adapter.get_history(
+                        symbol=sym, exchange=exchange,
+                        interval=tf,
+                        start_date=today, end_date=today,
+                    )
+                    if not bars:
+                        continue
+
+                    # Resolve underlying so warmup seeds the SAME worker
+                    # that handles live ticks (live routing also resolves
+                    # underlying before calling get_partition).
+                    from alerts.dependency_graph import dep_graph as _dg
+                    _underlying = _dg.underlying_for_symbol(sym) or sym
+                    partition = get_partition(_underlying)
+                    if partition >= len(self._workers):
+                        continue
+                    worker = self._workers[partition]
+
+                    # Feed each historical bar into the worker's rolling window
+                    # Skip the last bar (may be the still-open current candle)
+                    closed_bars = bars[:-1] if len(bars) > 1 else bars
+
+                    for bar in closed_bars:
+                        try:
+                            # OpenAlgo returns "timestamp" as Unix seconds.
+                            # Fallback to ISO string fields for other adapters.
+                            ts_unix = bar.get("timestamp")
+                            if ts_unix:
+                                ts_ist = datetime.fromtimestamp(int(ts_unix), tz=IST)
+                            else:
+                                dt_str = bar.get("date") or bar.get("time") or bar.get("datetime") or ""
+                                try:
+                                    ts_ist = datetime.fromisoformat(dt_str).replace(tzinfo=IST)
+                                except (ValueError, TypeError):
+                                    continue
+
+                            o = float(bar.get("open",   0))
+                            h = float(bar.get("high",   0))
+                            l = float(bar.get("low",    0))
+                            c = float(bar.get("close",  0))
+                            v = int(bar.get("volume",   0))
+                            if c <= 0:
+                                continue
+
+                            candle = _LiveCandle(
+                                symbol=sym, timeframe=tf,
+                                ts=ts_ist,
+                                end_ts=ts_ist,   # already closed
+                                open=o, high=h, low=l, close=c, volume=v,
+                            )
+                            # Seed indicators without triggering alert evaluation
+                            await worker.seed_candle(candle)
+                        except Exception:
+                            continue
+
+                    logger.info("[AlertPipeline] warmed %s %s: %d bars", sym, tf, len(closed_bars))
+                except Exception as exc:
+                    logger.warning("[AlertPipeline] warmup failed %s %s: %s", sym, tf, exc)
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────

@@ -1,14 +1,14 @@
 """008 — monitored positions, alert_rules, alert_histories tables
 
 Revision ID: 008
-Revises: 007
+Revises: 007b
 Create Date: 2026-03-17
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "008"
-down_revision = "007"
+down_revision = "007b"
 branch_labels = None
 depends_on = None
 

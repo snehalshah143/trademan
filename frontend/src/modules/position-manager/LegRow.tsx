@@ -8,6 +8,7 @@ interface LegRowProps {
   leg:       LiveLeg
   legNumber: number
   onExit:    (legId: string) => void
+  delta?:    number | null
 }
 
 function LotsPill({ value }: { value: number }) {
@@ -32,7 +33,7 @@ function QtyPill({ value }: { value: number }) {
   )
 }
 
-export function LegRow({ leg, legNumber, onExit }: LegRowProps) {
+export function LegRow({ leg, legNumber, onExit, delta }: LegRowProps) {
   const symbol  = leg.instrument.symbol
   const entry   = useLTPStore((s) => s.ltpMap[symbol])
   const flashKey = entry?.flashKey ?? 0
@@ -119,6 +120,20 @@ export function LegRow({ leg, legNumber, onExit }: LegRowProps) {
         <span className={cn('num text-xs font-semibold', profitLossClass(leg.legMTM))}>
           {leg.legMTM >= 0 ? '+' : ''}{fmtINRCompact(leg.legMTM)}
         </span>
+      </td>
+
+      {/* Delta */}
+      <td className="px-3 py-2.5 text-right">
+        {delta != null ? (
+          <span className={cn(
+            'num text-xs font-semibold',
+            delta > 0 ? 'text-profit' : delta < 0 ? 'text-loss' : 'text-text-muted'
+          )}>
+            {delta > 0 ? '+' : ''}{delta.toFixed(3)}
+          </span>
+        ) : (
+          <span className="text-[11px] text-text-muted">—</span>
+        )}
       </td>
 
       {/* Exit */}

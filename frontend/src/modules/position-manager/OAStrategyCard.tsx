@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
+import { ChevronDown, ChevronRight, ExternalLink, BarChart2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { OAPortfolioEntry, OAPortfolioLeg } from '@hooks/useOpenAlgoPortfolio'
 
@@ -10,9 +10,10 @@ function legDescriptor(leg: OAPortfolioLeg): string {
 
 interface Props {
   strategy: OAPortfolioEntry
+  onPayoff?: () => void
 }
 
-export function OAStrategyCard({ strategy }: Props) {
+export function OAStrategyCard({ strategy, onPayoff }: Props) {
   const [expanded, setExpanded] = useState(false)
 
   const legs = strategy.legs ?? []
@@ -70,6 +71,15 @@ export function OAStrategyCard({ strategy }: Props) {
             <span className="text-[10px] text-text-muted shrink-0">{createdLabel}</span>
           )}
 
+          {onPayoff && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPayoff() }}
+              className="p-1 text-text-muted hover:text-accent-purple transition-colors shrink-0"
+              title="View payoff chart"
+            >
+              <BarChart2 size={12} />
+            </button>
+          )}
           <a
             href={`http://127.0.0.1:5000/strategybuilder?portfolio=${strategy.id}`}
             target="_blank"

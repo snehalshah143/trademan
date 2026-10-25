@@ -1,7 +1,7 @@
 """Add instrument cache tables: cached_instruments, cached_expiries, instrument_sync_logs.
 
-Revision ID: 007
-Revises: 006
+Revision ID: 007b
+Revises: 007
 Create Date: 2026-03-14
 """
 from typing import Sequence, Union
@@ -9,8 +9,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "007"
-down_revision: Union[str, None] = "006"
+revision: str = "007b"
+down_revision: Union[str, None] = "007"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

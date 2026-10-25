@@ -112,6 +112,33 @@ export function useMarketWebSocket() {
         break
       }
 
+      case 'ALERT_SOUND': {
+        try {
+          const ctx = new AudioContext()
+          // Two-tone alert beep: 880 Hz → 660 Hz
+          const osc1 = ctx.createOscillator()
+          const osc2 = ctx.createOscillator()
+          const gain = ctx.createGain()
+          osc1.connect(gain)
+          osc2.connect(gain)
+          gain.connect(ctx.destination)
+          gain.gain.setValueAtTime(0.3, ctx.currentTime)
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6)
+          osc1.frequency.setValueAtTime(880, ctx.currentTime)
+          osc1.frequency.setValueAtTime(660, ctx.currentTime + 0.15)
+          osc2.frequency.setValueAtTime(880 * 1.5, ctx.currentTime)
+          osc2.frequency.setValueAtTime(660 * 1.5, ctx.currentTime + 0.15)
+          osc1.start(ctx.currentTime)
+          osc2.start(ctx.currentTime)
+          osc1.stop(ctx.currentTime + 0.6)
+          osc2.stop(ctx.currentTime + 0.6)
+          osc1.onended = () => ctx.close()
+        } catch {
+          // AudioContext not available (e.g. server-side)
+        }
+        break
+      }
+
       case 'CONNECTION_STATUS': {
         const payload = msg.payload as WSConnectionStatusPayload
         setConnectionStatus(payload.status)

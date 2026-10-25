@@ -148,11 +148,18 @@ export function MonitoredPositions() {
               <AlertList
                 strategyId={alertsFor.monitor_id}
                 strategyName={alertsFor.name}
-                positionLegs={alertsFor.legs.map(l => ({
-                  leg_id: l.leg_id,
-                  symbol: l.instrument,
-                  side: l.side,
-                }))}
+                positionLegs={[...alertsFor.legs]
+                  .sort((a, b) => {
+                    if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
+                    return a.leg_number - b.leg_number
+                  })
+                  .map((l, i) => ({
+                    leg_id:    l.leg_id,
+                    symbol:    l.instrument,
+                    side:      l.side,
+                    legNumber: i + 1,
+                  }))
+                }
               />
             )}
           </Dialog.Content>

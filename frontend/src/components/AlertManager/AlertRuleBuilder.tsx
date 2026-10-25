@@ -49,10 +49,39 @@ const colLabelCls = 'text-[9px] text-text-muted uppercase tracking-widest font-s
 
 // ── Leg type ─────────────────────────────────────────────────────────────────
 
-interface Leg {
-  leg_id: string
-  symbol: string
-  side:   'BUY' | 'SELL'
+export interface Leg {
+  leg_id:        string
+  symbol:        string
+  side:          'BUY' | 'SELL'
+  /** Explicit position-table number (1-based, BUY-first sorted). */
+  legNumber?:    number
+  /** Option strike price (undefined for futures/equities). */
+  strike?:       number | null
+  /** Instrument type: 'CE' | 'PE' | 'FUT' | 'EQ' | '' */
+  optionType?:   string
+  /** Override the auto-generated dropdown label (used by template placeholder slots). */
+  displayLabel?: string
+  /** Optgroup label in the target dropdown (template slots only). */
+  group?:        string
+}
+
+// Infer option type from symbol tail when not explicitly provided
+function _inferOptionType(symbol: string): string {
+  const tail = symbol.slice(-2).toUpperCase()
+  if (tail === 'CE' || tail === 'PE') return tail
+  if (/FUT$/i.test(symbol)) return 'FUT'
+  return ''
+}
+
+function _buildLegLabel(l: Leg, fallbackIndex: number): string {
+  if (l.displayLabel) return l.displayLabel
+  const num = l.legNumber ?? (fallbackIndex + 1)
+  const ot  = l.optionType ?? _inferOptionType(l.symbol)
+  const parts: string[] = []
+  if (l.strike != null) parts.push(String(l.strike))
+  if (ot)               parts.push(ot)
+  if (!parts.length)    parts.push(l.symbol.slice(-10))
+  return `L${num} · ${parts.join(' ')} (${l.side})`
 }
 
 // ── Target option (combines scope + leg_id into a single selector) ─────────
@@ -62,6 +91,7 @@ interface TargetOption {
   label:  string
   scope:  ConditionScope
   leg_id: string | null
+  group?: string   // for <optgroup> rendering (template slots only)
 }
 
 function buildTargetOptions(legs: Leg[]): TargetOption[] {
@@ -69,14 +99,37 @@ function buildTargetOptions(legs: Leg[]): TargetOption[] {
     { value: 'STRATEGY',  label: 'Strategy',                    scope: 'STRATEGY',  leg_id: null },
     ...legs.map((l, i) => ({
       value:  `LEG:${l.leg_id}`,
-      label:  `Leg ${i + 1} (${l.side})`,
+      label:  _buildLegLabel(l, i),
       scope:  'LEG' as ConditionScope,
       leg_id: l.leg_id,
+      group:  l.group,
     })),
     { value: 'SPOT',      label: 'Underlying Spot',             scope: 'SPOT',      leg_id: null },
     { value: 'CANDLE',    label: 'Underlying OHLCV (Candle)',   scope: 'CANDLE',    leg_id: null },
     { value: 'INDICATOR', label: 'Indicator on Underlying',     scope: 'INDICATOR', leg_id: null },
   ]
+}
+
+/** Render target options, grouping by `group` when present. */
+function TargetOptions({ options }: { options: TargetOption[] }) {
+  // Split into ungrouped and grouped
+  const ungrouped = options.filter(o => !o.group)
+  const groupMap  = new Map<string, TargetOption[]>()
+  for (const o of options.filter(o => o.group)) {
+    const g = o.group!
+    if (!groupMap.has(g)) groupMap.set(g, [])
+    groupMap.get(g)!.push(o)
+  }
+  return (
+    <>
+      {ungrouped.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      {[...groupMap.entries()].map(([grpLabel, opts]) => (
+        <optgroup key={grpLabel} label={grpLabel}>
+          {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </optgroup>
+      ))}
+    </>
+  )
 }
 
 // ── Timeframe short-label (Chartink-style prefix) ─────────────────────────────
@@ -224,7 +277,7 @@ function ConditionCard({ condition, positionLegs, onChange, onRemove }: Conditio
 
       {/* LHS: Target chip */}
       <select value={currentTargetValue} onChange={e => handleTargetChange(e.target.value)} className={chipBlue}>
-        {targetOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        <TargetOptions options={targetOptions} />
       </select>
 
       {/* LHS: Metric chip */}

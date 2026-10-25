@@ -263,6 +263,7 @@ export type WSMessageType =
   | 'LTP_TICK'
   | 'LTP_BATCH'
   | 'ALERT_FIRED'
+  | 'ALERT_SOUND'
   | 'CONNECTION_STATUS'
   | 'STALE_WARNING'
   | 'PING'

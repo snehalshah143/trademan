@@ -56,7 +56,9 @@ export const INDICATOR_SOURCE_OPTIONS: SourceOption[] = [
   { value: 'RSI_21',  label: 'RSI (21)',       group: 'Indicator' },
   { value: 'ATR_14',  label: 'ATR (14)',       group: 'Indicator' },
   { value: 'ATR_7',   label: 'ATR (7)',        group: 'Indicator' },
-  { value: 'MACD_HIST', label: 'MACD Histogram (12,26,9)', group: 'Indicator' },
+  { value: 'MACD_LINE',   label: 'MACD Line (12,26,9)',      group: 'Indicator' },
+  { value: 'MACD_SIGNAL', label: 'MACD Signal (12,26,9)',    group: 'Indicator' },
+  { value: 'MACD_HIST',   label: 'MACD Histogram (12,26,9)', group: 'Indicator' },
   { value: 'STOCH_K',   label: 'Stochastic %K (14,3)',     group: 'Indicator' },
 ]
 
@@ -78,6 +80,22 @@ export const METRIC_CONFIGS: Record<ConditionScope, MetricConfig[]> = {
       value: 'MAX_LOSS',   label: 'Max Loss Hit (₹)',     unit: '₹', needsTimeframe: false, params: [],
       description: 'Deepest drawdown in session (absolute ₹)',
     },
+    {
+      value: 'NET_DELTA',  label: 'Net Delta',             unit: '',  needsTimeframe: false, params: [],
+      description: 'Sum of signed deltas across all legs (BUY=+, SELL=−)',
+    },
+    {
+      value: 'NET_GAMMA',  label: 'Net Gamma',             unit: '',  needsTimeframe: false, params: [],
+      description: 'Sum of signed gammas across all legs',
+    },
+    {
+      value: 'NET_THETA',  label: 'Net Theta',             unit: '',  needsTimeframe: false, params: [],
+      description: 'Sum of signed thetas across all legs',
+    },
+    {
+      value: 'NET_VEGA',   label: 'Net Vega',              unit: '',  needsTimeframe: false, params: [],
+      description: 'Sum of signed vegas across all legs',
+    },
   ],
   LEG: [
     { value: 'LTP',             label: 'LTP (₹)',             unit: '₹', needsTimeframe: false, params: [] },
@@ -90,6 +108,22 @@ export const METRIC_CONFIGS: Record<ConditionScope, MetricConfig[]> = {
       description: 'LTP change ₹ from entry price',
     },
     { value: 'LEG_PNL',         label: 'Leg P&L (₹)',         unit: '₹', needsTimeframe: false, params: [] },
+    {
+      value: 'LEG_DELTA',       label: 'Leg Delta',           unit: '',  needsTimeframe: false, params: [],
+      description: 'Option delta for this leg (0 to ±1)',
+    },
+    {
+      value: 'LEG_GAMMA',       label: 'Leg Gamma',           unit: '',  needsTimeframe: false, params: [],
+      description: 'Option gamma for this leg',
+    },
+    {
+      value: 'LEG_THETA',       label: 'Leg Theta',           unit: '',  needsTimeframe: false, params: [],
+      description: 'Option theta (time decay per day) for this leg',
+    },
+    {
+      value: 'LEG_VEGA',        label: 'Leg Vega',            unit: '',  needsTimeframe: false, params: [],
+      description: 'Option vega (sensitivity to IV) for this leg',
+    },
   ],
   SPOT: [
     { value: 'SPOT_PRICE',   label: 'Spot Price (₹)',    unit: '₹', needsTimeframe: false, params: [] },
@@ -127,6 +161,24 @@ export const METRIC_CONFIGS: Record<ConditionScope, MetricConfig[]> = {
       value: 'RSI', label: 'RSI', unit: '', needsTimeframe: true,
       params: [{ key: 'period', label: 'Period', default: 14, min: 2, max: 100 }],
       description: 'Relative Strength Index (0–100)',
+    },
+    {
+      value: 'MACD_LINE', label: 'MACD Line', unit: '', needsTimeframe: true,
+      params: [
+        { key: 'fast',   label: 'Fast',   default: 12, min: 1 },
+        { key: 'slow',   label: 'Slow',   default: 26, min: 1 },
+        { key: 'signal', label: 'Signal', default: 9,  min: 1 },
+      ],
+      description: 'MACD Line (fast EMA − slow EMA)',
+    },
+    {
+      value: 'MACD_SIGNAL', label: 'MACD Signal', unit: '', needsTimeframe: true,
+      params: [
+        { key: 'fast',   label: 'Fast',   default: 12, min: 1 },
+        { key: 'slow',   label: 'Slow',   default: 26, min: 1 },
+        { key: 'signal', label: 'Signal', default: 9,  min: 1 },
+      ],
+      description: 'MACD Signal line (EMA of MACD Line)',
     },
     {
       value: 'MACD_HIST', label: 'MACD Histogram', unit: '', needsTimeframe: true,

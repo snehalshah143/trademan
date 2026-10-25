@@ -50,10 +50,27 @@ class RollingWindow:
     # RSI value ring (maxlen=50) — for EMA-of-RSI(14) calculation
     rsi_values: deque = field(default_factory=lambda: deque(maxlen=50))
 
+    # ── Incremental RSI(3) state ───────────────────────────────────────────────
+    rsi3_avg_gain: float = 0.0
+    rsi3_avg_loss: float = 0.0
+    rsi3_seeded:   bool  = False    # True once first 3 candles have been seen
+
+    # RSI(3) value ring (maxlen=50) — for EMA-of-RSI(3) calculation
+    rsi3_values: deque = field(default_factory=lambda: deque(maxlen=50))
+
     # ── Incremental EMA state per period ─────────────────────────────────────
     # period → current EMA value (None = not yet seeded)
-    _ema_close: dict[int, float | None]     = field(default_factory=dict)
-    _ema_rsi:   dict[int, float | None]     = field(default_factory=dict)
+    _ema_close:    dict[int, float | None]              = field(default_factory=dict)
+    _ema_rsi:      dict[int, float | None]              = field(default_factory=dict)
+    _ema_rsi3:     dict[int, float | None]              = field(default_factory=dict)
+    # Supertrend last value keyed by (period, factor_x10) e.g. (11, 20) for ST(11,2.0)
+    _supertrend:   dict[tuple[int, int], float | None]  = field(default_factory=dict)
+
+    def get_supertrend(self, period: int, factor: float) -> float | None:
+        return self._supertrend.get((period, round(factor * 10)))
+
+    def set_supertrend(self, period: int, factor: float, value: float) -> None:
+        self._supertrend[(period, round(factor * 10))] = value
 
     # ── Session VWAP accumulators (reset each day) ────────────────────────────
     _vwap_pv:  float = 0.0     # Σ(price × volume)
@@ -124,3 +141,9 @@ class RollingWindow:
 
     def set_ema_rsi(self, period: int, value: float) -> None:
         self._ema_rsi[period] = value
+
+    def get_ema_rsi3(self, period: int) -> float | None:
+        return self._ema_rsi3.get(period)
+
+    def set_ema_rsi3(self, period: int, value: float) -> None:
+        self._ema_rsi3[period] = value

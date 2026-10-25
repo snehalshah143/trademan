@@ -79,12 +79,14 @@ def ema_from_series(values: np.ndarray, period: int) -> float | None:
 
 # ── MACD Histogram ────────────────────────────────────────────────────────────
 
-def macd_histogram(closes: np.ndarray,
-                   fast: int = 12, slow: int = 26,
-                   signal: int = 9) -> float | None:
+def macd_full(closes: np.ndarray,
+              fast: int = 12, slow: int = 26,
+              signal: int = 9) -> tuple[float, float, float] | None:
     """
     Full MACD calculation.  O(N).  Called only on candle close.
-    Returns MACD_hist = MACD_line - signal_line.
+    Returns (macd_line, signal_line, histogram).
+    Seeds fast/slow EMAs with SMA of their respective first periods
+    to match TradingView behaviour.
     """
     need = slow + signal
     if len(closes) < need:
@@ -94,10 +96,11 @@ def macd_histogram(closes: np.ndarray,
     k_slow   = 2.0 / (slow   + 1)
     k_signal = 2.0 / (signal + 1)
 
-    ef = es = float(closes[0])
+    ef = float(closes[:fast].mean())
+    es = float(closes[:slow].mean())
     macd_vals: list[float] = []
 
-    for c in closes[1:]:
+    for c in closes[slow:]:
         ef = c * k_fast + ef * (1.0 - k_fast)
         es = c * k_slow + es * (1.0 - k_slow)
         macd_vals.append(ef - es)
@@ -109,24 +112,46 @@ def macd_histogram(closes: np.ndarray,
     for m in macd_vals[signal:]:
         sig = m * k_signal + sig * (1.0 - k_signal)
 
-    return macd_vals[-1] - sig
+    macd_line = macd_vals[-1]
+    return macd_line, sig, macd_line - sig
+
+
+def macd_histogram(closes: np.ndarray,
+                   fast: int = 12, slow: int = 26,
+                   signal: int = 9) -> float | None:
+    """Backward-compat wrapper — returns histogram only."""
+    result = macd_full(closes, fast=fast, slow=slow, signal=signal)
+    return result[2] if result is not None else None
 
 
 # ── ATR — Average True Range ──────────────────────────────────────────────────
 
 def atr(highs: np.ndarray, lows: np.ndarray,
         closes: np.ndarray, period: int = 14) -> float | None:
-    """Full ATR.  O(N).  Called only on candle close."""
+    """
+    Wilder's ATR.  O(N).  Called only on candle close.
+    Seeds with SMA of first period true ranges, then applies
+    Wilder's smoothing (k = 1/period) — matches TradingView.
+    """
     n = min(len(highs), len(lows), len(closes))
-    if n < period + 1:
+    # Need period+1 closes (for prev-close TR) plus warmup
+    warmup = min(n, period * 3 + 1)
+    if warmup < period + 1:
         return None
-    h = highs[-(period + 1):]
-    l = lows[-(period + 1):]
-    c = closes[-(period + 1):]
+    h = highs[-warmup:].astype(float)
+    l = lows[-warmup:].astype(float)
+    c = closes[-warmup:].astype(float)
     tr = np.maximum(h[1:] - l[1:],
          np.maximum(np.abs(h[1:] - c[:-1]),
                     np.abs(l[1:] - c[:-1])))
-    return float(tr.mean())
+    if len(tr) < period:
+        return None
+    # Wilder's: seed = SMA of first period TRs, then smooth
+    atr_val = float(tr[:period].mean())
+    k = 1.0 / period
+    for t in tr[period:]:
+        atr_val = atr_val * (1.0 - k) + float(t) * k
+    return atr_val
 
 
 # ── Bollinger Bands ───────────────────────────────────────────────────────────
@@ -135,12 +160,13 @@ def bollinger(closes: np.ndarray, period: int = 20,
               stddev: float = 2.0) -> tuple[float, float, float] | None:
     """
     Returns (upper, middle, lower).  Called only on candle close.
+    Uses population std (ddof=0) to match TradingView.
     """
     if len(closes) < period:
         return None
     window = closes[-period:].astype(float)
     mid    = float(window.mean())
-    std    = float(window.std(ddof=1))
+    std    = float(window.std(ddof=0))
     return mid + stddev * std, mid, mid - stddev * std
 
 
@@ -206,8 +232,69 @@ def adx(highs: np.ndarray, lows: np.ndarray,
     if len(dx) < period:
         return None
 
-    adx_val = float(dx[-period:].mean())
+    # Wilder's smoothing for DX → ADX (matches TradingView)
+    adx_val = float(dx[:period].mean())   # SMA seed
+    k = 1.0 / period
+    for d in dx[period:]:
+        adx_val = adx_val * (1.0 - k) + float(d) * k
     return adx_val
+
+
+# ── Supertrend ────────────────────────────────────────────────────────────────
+
+def supertrend(highs: np.ndarray, lows: np.ndarray,
+               closes: np.ndarray,
+               period: int = 10, factor: float = 3.0) -> float | None:
+    """
+    Supertrend indicator.  Full recalc.  O(N).  Called only on candle close.
+    Returns the current supertrend line value (upper band in downtrend,
+    lower band in uptrend).
+    """
+    n = min(len(highs), len(lows), len(closes))
+    if n < period + 2:
+        return None
+
+    h = highs[-n:].astype(float)
+    l = lows[-n:].astype(float)
+    c = closes[-n:].astype(float)
+
+    # True Range and Wilder's ATR
+    tr     = np.maximum(h[1:] - l[1:],
+             np.maximum(np.abs(h[1:] - c[:-1]),
+                        np.abs(l[1:] - c[:-1])))
+    atr    = np.empty(len(tr))
+    atr[0] = tr[:period].mean() if len(tr) >= period else tr.mean()
+    k      = 1.0 / period
+    for i in range(1, len(tr)):
+        atr[i] = atr[i - 1] * (1.0 - k) + tr[i] * k
+
+    hl2 = (h[1:] + l[1:]) / 2.0
+    c1  = c[1:]
+    m   = len(c1)
+
+    bu = hl2 + factor * atr   # basic upper
+    bl = hl2 - factor * atr   # basic lower
+    fu = bu.copy()             # final upper
+    fl = bl.copy()             # final lower
+    st = np.empty(m)
+    dr = np.ones(m)            # 1 = uptrend, -1 = downtrend
+
+    # Initialise first bar
+    dr[0] = 1.0 if c1[0] >= bu[0] else -1.0
+    st[0] = fl[0] if dr[0] == 1 else fu[0]
+
+    for i in range(1, m):
+        fu[i] = bu[i] if bu[i] < fu[i - 1] or c1[i - 1] > fu[i - 1] else fu[i - 1]
+        fl[i] = bl[i] if bl[i] > fl[i - 1] or c1[i - 1] < fl[i - 1] else fl[i - 1]
+
+        if dr[i - 1] == -1:
+            dr[i] = 1.0 if c1[i] > fu[i] else -1.0
+        else:
+            dr[i] = -1.0 if c1[i] < fl[i] else 1.0
+
+        st[i] = fl[i] if dr[i] == 1 else fu[i]
+
+    return float(st[-1])
 
 
 # ── VWAP (session-based) ──────────────────────────────────────────────────────

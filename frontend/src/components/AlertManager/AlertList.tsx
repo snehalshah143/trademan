@@ -6,14 +6,9 @@ import { toast } from 'react-hot-toast'
 import { cn } from '@/lib/utils'
 import { alertRuleService } from '@/services/alertService'
 import { AlertRuleBuilder } from './AlertRuleBuilder'
+import type { Leg } from './AlertRuleBuilder'
 import { defaultAlertRule, buildPreviewText } from '@/types/alertRules'
 import type { AlertRuleBuilderData } from '@/types/alertRules'
-
-interface Leg {
-  leg_id: string
-  symbol: string
-  side: 'BUY' | 'SELL'
-}
 
 interface AlertListProps {
   strategyId: string

@@ -98,6 +98,9 @@ async def lifespan(app: FastAPI):
     from monitors.monitor_engine import monitor_engine
     await monitor_engine.start()
 
+    from services.greeks_service import greeks_cache
+    await greeks_cache.start()
+
     # ── Instrument sync (non-blocking background task) ─────────────────────
     async def _run_instrument_sync() -> None:
         try:
@@ -149,6 +152,9 @@ async def lifespan(app: FastAPI):
     from alerts.alert_pipeline import alert_pipeline as _ap
     await _ap.stop()
 
+    from services.greeks_service import greeks_cache as _gc
+    await _gc.stop()
+
     from services.ltp.ltp_service import ltp_service as _ltp
     await _ltp.stop()
 
@@ -186,9 +192,12 @@ from api.routes import strategies, alerts, positions, orders, instruments
 from api.routes import settings as settings_router
 from api.routes import quotes as quotes_router
 from api.routes import alert_rules as alert_rules_router
+from api.routes import alert_templates as alert_templates_router
 from api.routes import monitored_positions as mp_router
 from api.routes import monitor_alerts as ma_router
 from api.routes import symbols as symbols_router
+from api.routes import oa_portfolio as oa_portfolio_router
+from api.routes import greeks as greeks_router
 from ws.endpoint import router as ws_router
 
 app.include_router(strategies.router,         prefix="/api/v1")
@@ -198,10 +207,13 @@ app.include_router(orders.router,             prefix="/api/v1")
 app.include_router(settings_router.router,    prefix="/api/v1")
 app.include_router(instruments.router,        prefix="/api")
 app.include_router(quotes_router.router,      prefix="/api")
-app.include_router(alert_rules_router.router, prefix="/api/v1")
+app.include_router(alert_rules_router.router,     prefix="/api/v1")
+app.include_router(alert_templates_router.router, prefix="/api/v1")
 app.include_router(mp_router.router,          prefix="/api/v1")
 app.include_router(ma_router.router,          prefix="/api/v1")
 app.include_router(symbols_router.router,     prefix="/api/v1")
+app.include_router(oa_portfolio_router.router, prefix="/api/v1")
+app.include_router(greeks_router.router,       prefix="/api/v1")
 app.include_router(ws_router)
 
 

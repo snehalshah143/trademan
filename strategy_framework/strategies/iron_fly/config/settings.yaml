@@ -1,0 +1,144 @@
+# ============================================================
+# Monthly Dynamic Iron Fly — Configuration
+# ============================================================
+# All strategy parameters come from this file.
+# No hardcoded values exist anywhere in the codebase.
+# ============================================================
+
+# ------------------------------------------------------------
+# OpenAlgo connection
+# ------------------------------------------------------------
+OPENALGO_API_KEY: "8a5d3ab9720d58f9f6a0020e957cea940fb4d1213d70c529518239b48e2b0edf"
+OPENALGO_HOST: "http://127.0.0.1:5000"
+API_TIMEOUT: 30          # seconds per HTTP request
+
+# ------------------------------------------------------------
+# Execution mode
+# ------------------------------------------------------------
+# PAPER : Simulate orders; maintain virtual positions and MTM.
+# LIVE  : Place actual orders via OpenAlgo broker API.
+EXECUTION_MODE: "PAPER"
+
+# ------------------------------------------------------------
+# Underlying instrument
+# ------------------------------------------------------------
+UNDERLYING: "NIFTY"
+EXCHANGE_INDEX: "NSE_INDEX"      # exchange for spot / option chain
+EXCHANGE_OPTIONS: "NFO"          # exchange for placing option orders
+STRIKE_INTERVAL: 50              # NIFTY = 50, BANKNIFTY = 100
+LOT_SIZE: 75                     # NIFTY lot size (update on contract changes)
+NUM_LOTS: 1                      # number of lots to trade
+PRODUCT: "NRML"                  # NRML for positional; MIS for intraday
+
+# ------------------------------------------------------------
+# Monitoring
+# ------------------------------------------------------------
+MONITORING_INTERVAL: 180         # seconds between each monitoring cycle
+
+# ------------------------------------------------------------
+# Deployment timing
+# ------------------------------------------------------------
+DEPLOYMENT_TIME: "09:30"         # do not deploy before this time
+
+# ------------------------------------------------------------
+# Wing distance calculation — fresh deployment
+# ------------------------------------------------------------
+# Wing distance = CE premium + PE premium + FRESH_WING_BUFFER
+# Result rounded UP to the nearest FRESH_WING_ROUNDING points.
+FRESH_WING_BUFFER: 100
+FRESH_WING_ROUNDING: 100         # round up to nearest 100
+
+# ------------------------------------------------------------
+# Wing distance calculation — post-adjustment realignment
+# ------------------------------------------------------------
+# Wing distance = CE premium + PE premium + ADJUSTMENT_BUFFER
+# Result rounded UP to the nearest ADJUSTMENT_ROUNDING points.
+ADJUSTMENT_BUFFER: 50
+ADJUSTMENT_ROUNDING: 50          # round up to nearest 50
+
+# ------------------------------------------------------------
+# Adjustment trigger — breakeven buffer
+# ------------------------------------------------------------
+# Adjustment fires if: spot >= upper_breakeven + BREAKEVEN_BUFFER
+# or                   spot <= lower_breakeven - BREAKEVEN_BUFFER
+BREAKEVEN_BUFFER: 25
+
+# ------------------------------------------------------------
+# Adjustment trigger — premium doubling
+# ------------------------------------------------------------
+# Adjustment fires if CE or PE premium >= entry_premium * PREMIUM_DOUBLE_FACTOR
+PREMIUM_DOUBLE_FACTOR: 2
+
+# ------------------------------------------------------------
+# Recovery trigger
+# ------------------------------------------------------------
+# After a downside adjustment: recovery_trigger = adjustment_price + RECOVERY_BUFFER
+# After an upside adjustment : recovery_trigger = adjustment_price - RECOVERY_BUFFER
+# Wing realignment only happens after recovery trigger is crossed.
+RECOVERY_BUFFER: 50
+
+# Trailing recovery trigger
+# Once a recovery trigger is set, it trails the market like a trailing stop.
+# Bullish (upside adjustment): trigger = rolling_high - TRAILING_RECOVERY_BUFFER
+# Bearish (downside adjustment): trigger = rolling_low + TRAILING_RECOVERY_BUFFER
+# Trigger only ratchets in the favourable direction — never reverses.
+TRAILING_RECOVERY_BUFFER: 75
+
+# ------------------------------------------------------------
+# Adjustment limits
+# ------------------------------------------------------------
+# Set to 0 for UNLIMITED adjustments.
+MAXIMUM_ADJUSTMENTS: 0           # 0 = unlimited
+
+# ------------------------------------------------------------
+# Gap opening delay
+# ------------------------------------------------------------
+# If market opens beyond breakeven or premium already doubled,
+# wait this many minutes before evaluating the adjustment.
+GAP_DELAY: 10                    # minutes
+
+# ------------------------------------------------------------
+# Wing tightening
+# ------------------------------------------------------------
+# When strategy MTM >= WING_TIGHTENING_TRIGGER, move both hedge wings
+# WING_TIGHTENING_DISTANCE points closer to center.
+WING_TIGHTENING_TRIGGER: 10000
+WING_TIGHTENING_DISTANCE: 100
+
+# ------------------------------------------------------------
+# MTM protection — trailing locks
+# ------------------------------------------------------------
+# Level 1: when MTM >= MTM_TRIGGER_LEVEL_1, lock MTM_LOCK_LEVEL_1
+#           if MTM subsequently falls below MTM_LOCK_LEVEL_1 → exit.
+MTM_TRIGGER_LEVEL_1: 8000
+MTM_LOCK_LEVEL_1: 2500
+
+# Level 2: when MTM >= MTM_TRIGGER_LEVEL_2, upgrade lock to MTM_LOCK_LEVEL_2
+#           if MTM subsequently falls below MTM_LOCK_LEVEL_2 → exit.
+MTM_TRIGGER_LEVEL_2: 12000
+MTM_LOCK_LEVEL_2: 6000
+
+# ------------------------------------------------------------
+# T-1 day early exit
+# ------------------------------------------------------------
+# One trading day before expiry: if MTM >= EARLY_EXIT_MTM → exit.
+EARLY_EXIT_MTM: 12000
+
+# ------------------------------------------------------------
+# Expiry day exit
+# ------------------------------------------------------------
+# Exit all legs at this time on expiry day regardless of MTM.
+EXPIRY_EXIT_TIME: "11:00"
+
+# ------------------------------------------------------------
+# Order retry
+# ------------------------------------------------------------
+MAX_ORDER_RETRY: 3               # retries on partial fill / rejection
+ORDER_POLL_INTERVAL: 2           # seconds between order status polls
+ORDER_FILL_TIMEOUT: 60           # seconds to wait for a fill before failing
+
+# ------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------
+LOG_LEVEL: "INFO"                # DEBUG / INFO / WARNING / ERROR
+LOG_FILE: "logs/iron_fly.log"

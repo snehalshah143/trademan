@@ -6,9 +6,10 @@ interface ExpiryGroupProps {
   legs:         LiveLeg[]
   legNumberMap: Map<string, number>
   onExitLeg:    (legId: string) => void
+  legDeltaMap?: Record<string, number | null>
 }
 
-export function ExpiryGroup({ legs, legNumberMap, onExitLeg }: ExpiryGroupProps) {
+export function ExpiryGroup({ legs, legNumberMap, onExitLeg, legDeltaMap }: ExpiryGroupProps) {
   return (
     <>
       {legs.map((leg) => (
@@ -17,6 +18,7 @@ export function ExpiryGroup({ legs, legNumberMap, onExitLeg }: ExpiryGroupProps)
           leg={leg}
           legNumber={legNumberMap.get(leg.id) ?? 1}
           onExit={onExitLeg}
+          delta={legDeltaMap?.[leg.id] ?? null}
         />
       ))}
     </>

@@ -6,6 +6,7 @@ import { toast } from 'react-hot-toast'
 import { cn } from '@/lib/utils'
 import { alertRuleService } from '@/services/alertService'
 import { AlertList } from './AlertList'
+import type { Leg } from './AlertRuleBuilder'
 import { buildPreviewText } from '@/types/alertRules'
 import type { AlertRuleBuilderData } from '@/types/alertRules'
 import { useStrategyStore } from '@store/strategyStore'
@@ -173,7 +174,7 @@ interface PositionGroupProps {
   strategyName: string
   underlyingSymbol?: string
   rules: AlertRuleBuilderData[]
-  positionLegs: Array<{ leg_id: string; symbol: string; side: 'BUY' | 'SELL' }>
+  positionLegs: Leg[]
   onRename: (name: string) => void
 }
 
@@ -312,11 +313,19 @@ export function AlertsByPosition() {
       strategyName,
       underlyingSymbol: storeStrategy?.underlyingSymbol,
       rules:            allRules.filter(r => r.strategy_id === strategyId),
-      positionLegs:     storeStrategy?.legs.map(l => ({
-        leg_id: l.id,
-        symbol: l.instrument.symbol,
-        side:   l.side,
-      })) ?? [],
+      positionLegs:     ([...(storeStrategy?.legs ?? [])]
+        .sort((a, b) => {
+          if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
+          return a.legIndex - b.legIndex
+        })
+        .map((l, i) => ({
+          leg_id:     l.id,
+          symbol:     l.instrument.symbol,
+          side:       l.side,
+          legNumber:  i + 1,
+          strike:     l.instrument.strike ?? null,
+          optionType: l.instrument.instrumentType,
+        }))),
     }
   })
 
@@ -329,11 +338,19 @@ export function AlertsByPosition() {
       strategyName:     s.name,
       underlyingSymbol: s.underlyingSymbol,
       rules:            [] as AlertRuleBuilderData[],
-      positionLegs:     s.legs.map(l => ({
-        leg_id: l.id,
-        symbol: l.instrument.symbol,
-        side:   l.side,
-      })),
+      positionLegs:     ([...s.legs]
+        .sort((a, b) => {
+          if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
+          return a.legIndex - b.legIndex
+        })
+        .map((l, i) => ({
+          leg_id:     l.id,
+          symbol:     l.instrument.symbol,
+          side:       l.side,
+          legNumber:  i + 1,
+          strike:     l.instrument.strike ?? null,
+          optionType: l.instrument.instrumentType,
+        }))),
     }))
 
   const allGroups = [...groupsWithAlerts, ...groupsNoAlerts]

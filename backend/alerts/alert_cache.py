@@ -44,13 +44,18 @@ class AlertCache:
                 async with self._lock:
                     self._rules = {}
                     for row in rows:
-                        sid = str(row.strategy_id)
+                        import uuid as _uuid
+                        try:
+                            sid = str(_uuid.UUID(str(row.strategy_id))) if row.strategy_id else str(row.strategy_id)
+                        except (ValueError, AttributeError):
+                            sid = str(row.strategy_id)
                         if sid not in self._rules:
                             self._rules[sid] = []
                         self._rules[sid].append({
                             "alert_id":       row.alert_id,
                             "strategy_id":    sid,
                             "name":           row.name,
+                            "strategy_name":  row.strategy_name or "",
                             "trigger_once":   row.trigger_once,
                             "cooldown_secs":  row.cooldown_secs,
                             "triggered_count": row.triggered_count,

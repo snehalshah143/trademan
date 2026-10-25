@@ -55,7 +55,39 @@ def _indicator_key(symbol: str, timeframe: str, metric: str,
       EMA of Close, period=21    → "NIFTY:15m:EMA_21"
       MACD_HIST                  → "NIFTY:15m:MACD_HIST"
     """
-    period = int(params[0]) if params else ""
+    # params may be a list [14] or a dict {"period": 14, "factor": 3.0}
+    if isinstance(params, dict):
+        period = int(params.get("period", 0)) or ""
+    elif params:
+        try:
+            period = int(params[0])
+        except (TypeError, ValueError, KeyError):
+            period = ""
+    else:
+        period = ""
+
+    # SUPERTREND key must include factor (period alone is ambiguous across variants)
+    # Key format: SUPERTREND_{period}_{factor*10}  e.g. SUPERTREND_10_30
+    if metric == "SUPERTREND":
+        if isinstance(params, dict):
+            _st_p = int(params.get("period", 10))
+            _st_f = float(params.get("factor", 3.0))
+        else:
+            _st_p, _st_f = 10, 3.0
+        suffix = f"SUPERTREND_{_st_p}_{round(_st_f * 10)}"
+        return f"{symbol}:{timeframe}:{suffix}"
+
+    # MACD key must include fast/slow/signal params so the dep lookup matches
+    # the indicator name the SymbolWorker emits (e.g. "MACD_LINE_10_22_7").
+    if metric in ("MACD_LINE", "MACD_SIGNAL", "MACD_HIST"):
+        if isinstance(params, dict):
+            _fast   = int(params.get("fast",   12))
+            _slow   = int(params.get("slow",   26))
+            _signal = int(params.get("signal",  9))
+        else:
+            _fast, _slow, _signal = 12, 26, 9
+        suffix = f"{metric}_{_fast}_{_slow}_{_signal}"
+        return f"{symbol}:{timeframe}:{suffix}"
 
     if metric in ("EMA", "SMA") and source and source.upper() != "CLOSE":
         # Chained indicator: EMA of RSI(14) with period 9
@@ -111,14 +143,18 @@ class DependencyGraph:
             underlying = strategy_underlyings.get(strategy_id, "")
             legs       = strategy_legs.get(strategy_id, [])
 
-            # Register each leg symbol as a price dependency
+            # Update symbol → underlying routing map (used by route_tick).
+            # DO NOT add all rules to price deps here — _index_condition
+            # registers each rule only under the dep keys that match its
+            # actual scope (STRATEGY/LEG/SPOT → price:sym,
+            # INDICATOR → sym:tf:indicator, CANDLE → candle:sym:tf).
+            # Adding ALL rules (including INDICATOR scope) to price deps
+            # caused indicator cross-alerts to evaluate on every price tick,
+            # not just on candle close — producing false triggers.
             for leg in legs:
                 sym = leg.get("symbol", "")
                 if sym:
-                    self._register(strategy_id, f"price:{sym}",
-                                   rule_list, underlying)
                     self._symbol_underlying[sym] = underlying or sym
-            # Map the underlying to itself so route_tick can find its partition
             if underlying:
                 self._symbol_underlying[underlying] = underlying
 

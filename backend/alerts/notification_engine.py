@@ -18,9 +18,13 @@ async def notify(rule: dict, ctx: dict) -> None:
     name        = rule["name"]
     ts          = datetime.now(tz=timezone.utc).isoformat()
 
-    mtm  = ctx.get("mtm", 0.0)
-    spot = ctx.get("spot", 0.0)
-    message = f"{name} triggered | MTM: {mtm:.0f} | Spot: {spot:.0f}"
+    mtm           = ctx.get("mtm", 0.0)
+    spot          = ctx.get("spot", 0.0)
+    # Prefer strategy_name stored on the rule itself (always populated at rule creation);
+    # fall back to the runtime context mirror as a secondary source.
+    strategy_name = rule.get("strategy_name") or ctx.get("strategy_name", "")
+    prefix        = f"{strategy_name} | " if strategy_name else ""
+    message       = f"{prefix}{name} triggered | MTM: {mtm:.0f} | Spot: {spot:.0f}"
 
     # ── Persist AlertEvent to DB (powers alert history endpoint) ───────────────
     try:
