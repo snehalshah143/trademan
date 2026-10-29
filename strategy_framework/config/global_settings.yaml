@@ -1,0 +1,24 @@
+# =============================================================================
+# GLOBAL SETTINGS — strategy_framework/config/global_settings.yaml
+# =============================================================================
+# Shared settings loaded by ALL strategies automatically.
+# Strategy-specific configs (execution_settings.yaml / monitoring_settings.yaml)
+# are overlaid on top — they override any value set here.
+#
+# Set your OpenAlgo credentials here once and all strategies pick them up.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# OpenAlgo connection  (shared across all strategies)
+# ---------------------------------------------------------------------------
+OPENALGO_API_KEY: "8a5d3ab9720d58f9f6a0020e957cea940fb4d1213d70c529518239b48e2b0edf"
+OPENALGO_HOST: "http://127.0.0.1:5000"
+API_TIMEOUT: 30
+
+# ---------------------------------------------------------------------------
+# Telegram notifications  (shared across all strategies)
+# ---------------------------------------------------------------------------
+NOTIFY_TELEGRAM: false
+TELEGRAM_TOKEN: ""
+TELEGRAM_CHAT_ID: ""
+TELEGRAM_MIN_LEVEL: "ALERT"               # INFO | WARNING | ALERT | URGENT

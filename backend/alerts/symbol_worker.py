@@ -653,10 +653,12 @@ class SymbolWorker:
         leg_vegas:        dict[str, float] = {}
         total_mtm  = 0.0
         deployed   = 0.0
-        net_delta  = 0.0
-        net_gamma  = 0.0
-        net_theta  = 0.0
-        net_vega   = 0.0
+        _raw_net_delta  = 0.0
+        _raw_net_gamma  = 0.0
+        _raw_net_theta  = 0.0
+        _raw_net_vega   = 0.0
+        _option_legs_total   = 0
+        _option_legs_loaded  = 0
 
         from services.greeks_service import greeks_cache, is_option
 
@@ -680,18 +682,32 @@ class SymbolWorker:
 
             # Greeks — only for option legs
             if is_option(sym, opt):
+                _option_legs_total += 1
                 g = greeks_cache.get(sym)
                 if g:
+                    _option_legs_loaded += 1
                     leg_deltas[lid] = g["delta"]
                     leg_gammas[lid] = g["gamma"]
                     leg_thetas[lid] = g["theta"]
                     leg_vegas[lid]  = g["vega"]
-                    net_delta  += mult * g["delta"]
-                    net_gamma  += mult * g["gamma"]
-                    net_theta  += mult * g["theta"]
-                    net_vega   += mult * g["vega"]
+                    _raw_net_delta  += mult * g["delta"]
+                    _raw_net_gamma  += mult * g["gamma"]
+                    _raw_net_theta  += mult * g["theta"]
+                    _raw_net_vega   += mult * g["vega"]
 
-        spot    = ltp_mirror.get(underlying, ltp_mirror.get(legs[0]["symbol"] if legs else "", 0.0))
+        # Net greeks are only valid when EVERY option leg has data.
+        # If any leg is missing (startup, OA error, new symbol) return None
+        # so delta/greek conditions evaluate to False rather than fire spuriously.
+        _all_greeks_ready = (_option_legs_total == 0 or
+                             _option_legs_loaded == _option_legs_total)
+        net_delta = _raw_net_delta if _all_greeks_ready else None
+        net_gamma = _raw_net_gamma if _all_greeks_ready else None
+        net_theta = _raw_net_theta if _all_greeks_ready else None
+        net_vega  = _raw_net_vega  if _all_greeks_ready else None
+
+        # Spot = underlying index LTP (e.g. NIFTY cash).
+        # Never fall back to a leg LTP — option premiums (~50) would show as Spot:54.
+        spot    = ltp_mirror.get(underlying, 0.0) if underlying else 0.0
         pnl_pct = (total_mtm / deployed * 100.0) if deployed > 0 else 0.0
 
         # Aggregate all indicator values for the underlying.
@@ -759,10 +775,10 @@ class SymbolWorker:
             "leg_entry_prices": leg_entry_prices,
             "leg_quantities":   leg_quantities,
             "leg_sides":        leg_sides,
-            "leg_deltas":       leg_deltas,
-            "leg_gammas":       leg_gammas,
-            "leg_thetas":       leg_thetas,
-            "leg_vegas":        leg_vegas,
+            "leg_deltas":       leg_deltas if _all_greeks_ready else {},
+            "leg_gammas":       leg_gammas if _all_greeks_ready else {},
+            "leg_thetas":       leg_thetas if _all_greeks_ready else {},
+            "leg_vegas":        leg_vegas  if _all_greeks_ready else {},
             "net_delta":        net_delta,
             "net_gamma":        net_gamma,
             "net_theta":        net_theta,

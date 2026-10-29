@@ -6,11 +6,8 @@
 # ============================================================
 
 # ------------------------------------------------------------
-# OpenAlgo connection
+# OpenAlgo connection  →  set once in config/global_settings.yaml
 # ------------------------------------------------------------
-OPENALGO_API_KEY: "8a5d3ab9720d58f9f6a0020e957cea940fb4d1213d70c529518239b48e2b0edf"
-OPENALGO_HOST: "http://127.0.0.1:5000"
-API_TIMEOUT: 30          # seconds per HTTP request
 
 # ------------------------------------------------------------
 # Execution mode

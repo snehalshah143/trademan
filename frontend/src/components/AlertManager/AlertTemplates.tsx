@@ -12,11 +12,11 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Layers, Plus, Edit2, Trash2, Play, ChevronRight, ArrowRight, AlertTriangle } from 'lucide-react'
 import { toast } from 'react-hot-toast'
+import axios from 'axios'
 import { cn } from '@/lib/utils'
 import { alertTemplateService } from '@/services/alertService'
 import type { AlertTemplateDB, AlertTemplateAlert } from '@/services/alertService'
 import { AlertTemplateEditor, TEMPLATE_ROLE_SLOTS } from './AlertTemplateEditor'
-import { useStrategyStore } from '@store/strategyStore'
 import { buildPreviewText } from '@/types/alertRules'
 import type { ConditionGroup } from '@/types/alertRules'
 
@@ -58,12 +58,54 @@ interface ApplyModalProps {
   onClose:  () => void
 }
 
+// Shape returned by GET /api/v1/strategies and /api/v1/strategies/{id}
+interface BackendLeg {
+  id:          string
+  symbol:      string
+  action:      string         // 'BUY' | 'SELL'
+  option_type: string | null  // 'CE' | 'PE' | 'FUT' | null
+  strike:      number | null
+}
+interface BackendStrategy {
+  id:   string
+  name: string
+  legs: BackendLeg[]
+}
+
 function ApplyModal({ template, onClose }: ApplyModalProps) {
   const [selectedId, setSelectedId] = useState('')
-  const strategies = useStrategyStore(s => s.strategies)
+  const [manualMap,  setManualMap]  = useState<Record<string, string>>({})
   const qc = useQueryClient()
 
-  // Collect which leg slots are actually used across all alerts in this template
+  // ── Strategy list from backend (always current, not stale store) ─────────────
+  const { data: backendStrategies = [] } = useQuery<BackendStrategy[]>({
+    queryKey: ['strategies-for-apply-modal'],
+    queryFn:  () => axios.get('/api/v1/strategies').then(r => r.data),
+    staleTime: 30_000,
+  })
+
+  // ── Fetch selected strategy's legs from backend (authoritative) ──────────────
+  const { data: selectedDetail, isFetching: legsFetching } = useQuery<BackendStrategy>({
+    queryKey: ['strategy-detail-apply', selectedId],
+    queryFn:  () => axios.get(`/api/v1/strategies/${selectedId}`).then(r => r.data),
+    enabled:  !!selectedId,
+    staleTime: 10_000,
+  })
+
+  // Normalise backend legs: action→side, option_type→instrumentType
+  type NormLeg = { id: string; side: string; instrumentType: string; symbol: string; strike: number | null }
+  const normLegs = useMemo<NormLeg[]>(() => {
+    if (!selectedDetail) return []
+    return selectedDetail.legs.map(l => ({
+      id:             String(l.id),
+      side:           l.action,
+      instrumentType: l.option_type ?? inferInstrumentType(l.symbol, undefined),
+      symbol:         l.symbol,
+      strike:         l.strike,
+    }))
+  }, [selectedDetail])
+
+  // ── Collect which slots are used across all alerts in this template ───────────
   const usedSlots = useMemo<Set<string>>(() => {
     const all = new Set<string>()
     for (const alert of template.alerts) {
@@ -74,58 +116,73 @@ function ApplyModal({ template, onClose }: ApplyModalProps) {
 
   const hasLegConditions = usedSlots.size > 0
 
-  // Match each used role slot to the strategy leg with the same side + instrumentType
-  const selectedStrategy = useMemo(
-    () => strategies.find(s => s.id === selectedId) ?? null,
-    [strategies, selectedId]
-  )
+  // Which alerts reference each slot (shown in the mapping table)
+  const slotAlertNames = useMemo<Record<string, string[]>>(() => {
+    const map: Record<string, string[]> = {}
+    for (const alert of template.alerts) {
+      for (const slot of collectUsedSlots(alert.condition_tree)) {
+        if (!map[slot]) map[slot] = []
+        if (!map[slot].includes(alert.name)) map[slot].push(alert.name)
+      }
+    }
+    return map
+  }, [template.alerts])
 
-  type StratLeg = { id: string; side: string; legIndex: number; instrument: { symbol: string; instrumentType: string; strike?: number | null } }
+  // ── Auto-detect initial mapping ───────────────────────────────────────────────
+  const autoMapping = useMemo<Record<string, string>>(() => {
+    if (!normLegs.length) return {}
+    const result: Record<string, string> = {}
 
-  const { legOverrides, mapping } = useMemo(() => {
-    if (!selectedStrategy) return { legOverrides: undefined, mapping: [] }
-    const legs = selectedStrategy.legs as StratLeg[]
-    // Sorted BUY-first → legIndex for positional slots
-    const sorted = [...legs].sort((a, b) => {
-      if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
-      return a.legIndex - b.legIndex
+    // Positional: BUY-first sort
+    const sorted = [...normLegs].sort((a, b) =>
+      a.side !== b.side ? (a.side === 'BUY' ? -1 : 1) : 0
+    )
+    const POSITIONAL = ['leg_1', 'leg_2', 'leg_3', 'leg_4']
+    POSITIONAL.forEach((slot, i) => {
+      if (usedSlots.has(slot) && sorted[i]) result[slot] = sorted[i].id
     })
-    const overrides: Record<string, string> = {}
-    const rows: Array<{ slot: string; slotLabel: string; leg: StratLeg | undefined; group: string }> = []
 
-    // ── Positional slots: leg_1 → sorted[0], leg_2 → sorted[1], …
+    // Role-based: match by side + instrument type
+    for (const r of TEMPLATE_ROLE_SLOTS) {
+      if (!usedSlots.has(r.leg_id)) continue
+      const matched = normLegs.find(l => l.side === r.side && l.instrumentType === r.optionType)
+      if (matched) result[r.leg_id] = matched.id
+    }
+    return result
+  }, [normLegs, usedSlots])
+
+  // Reset manual overrides when strategy changes
+  const handleStrategyChange = (id: string) => {
+    setSelectedId(id)
+    setManualMap({})
+  }
+
+  const effectiveMap = useMemo(() => ({ ...autoMapping, ...manualMap }), [autoMapping, manualMap])
+
+  // Rows to show in the mapping table
+  const mappingRows = useMemo(() => {
+    if (!selectedId) return []
+    const rows: Array<{ slot: string; slotLabel: string; group: string }> = []
     const POSITIONAL = [
       { leg_id: 'leg_1', displayLabel: 'Leg 1' },
       { leg_id: 'leg_2', displayLabel: 'Leg 2' },
       { leg_id: 'leg_3', displayLabel: 'Leg 3' },
       { leg_id: 'leg_4', displayLabel: 'Leg 4' },
     ]
-    for (let i = 0; i < POSITIONAL.length; i++) {
-      const slot = POSITIONAL[i]
-      if (!usedSlots.has(slot.leg_id)) continue
-      const leg = sorted[i]
-      rows.push({ slot: slot.leg_id, slotLabel: slot.displayLabel, leg, group: 'Positional' })
-      if (leg) overrides[slot.leg_id] = leg.id
+    for (const p of POSITIONAL) {
+      if (usedSlots.has(p.leg_id)) rows.push({ slot: p.leg_id, slotLabel: p.displayLabel, group: 'Positional' })
     }
-
-    // ── Role-based slots: matched by side + inferred instrument type from symbol
-    for (const roleSlot of TEMPLATE_ROLE_SLOTS) {
-      if (!usedSlots.has(roleSlot.leg_id)) continue
-      const matched = [...legs]
-        .sort((a, b) => a.legIndex - b.legIndex)
-        .find(l =>
-          l.side === roleSlot.side &&
-          inferInstrumentType(l.instrument.symbol, l.instrument.instrumentType) === roleSlot.optionType
-        )
-      rows.push({ slot: roleSlot.leg_id, slotLabel: roleSlot.displayLabel, leg: matched, group: 'F&O Role' })
-      if (matched) overrides[roleSlot.leg_id] = matched.id
+    for (const r of TEMPLATE_ROLE_SLOTS) {
+      if (usedSlots.has(r.leg_id)) rows.push({ slot: r.leg_id, slotLabel: r.displayLabel, group: 'F&O Role' })
     }
-
-    return { legOverrides: Object.keys(overrides).length ? overrides : undefined, mapping: rows }
-  }, [selectedStrategy, usedSlots])
+    return rows
+  }, [selectedId, usedSlots])
 
   const applyMut = useMutation({
-    mutationFn: () => alertTemplateService.apply(template.template_id, selectedId, legOverrides),
+    mutationFn: () => {
+      const overrides = Object.keys(effectiveMap).length ? effectiveMap : undefined
+      return alertTemplateService.apply(template.template_id, selectedId, overrides)
+    },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['alert-rules'] })
       qc.invalidateQueries({ queryKey: ['alert-rules-all'] })
@@ -136,12 +193,13 @@ function ApplyModal({ template, onClose }: ApplyModalProps) {
     onError: () => toast.error('Failed to apply template'),
   })
 
-  // Check for unmapped slots (template uses a slot but strategy has no leg for it)
-  const unmapped = mapping.filter(r => !r.leg)
+  const unmappedCount = hasLegConditions
+    ? mappingRows.filter(r => !effectiveMap[r.slot]).length
+    : 0
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="bg-surface-1 border border-border-default rounded-xl shadow-modal w-full max-w-md p-5 flex flex-col gap-4">
+      <div className="bg-surface-1 border border-border-default rounded-xl shadow-modal w-full max-w-lg p-5 flex flex-col gap-4">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">Apply Template</h3>
           <p className="text-xs text-text-muted mt-0.5">
@@ -149,84 +207,104 @@ function ApplyModal({ template, onClose }: ApplyModalProps) {
           </p>
         </div>
 
+        {/* Strategy selector */}
         <div>
           <label className="block text-[10px] text-text-muted mb-1 uppercase tracking-wide">Apply to strategy</label>
           <select
             value={selectedId}
-            onChange={e => setSelectedId(e.target.value)}
+            onChange={e => handleStrategyChange(e.target.value)}
             className="w-full px-3 py-1.5 text-sm bg-surface-2 border border-border-default rounded text-text-primary focus:outline-none focus:border-accent-blue"
           >
             <option value="">Select strategy…</option>
-            {strategies.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.name} {s.underlyingSymbol ? `(${s.underlyingSymbol})` : ''}
-              </option>
+            {backendStrategies.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
         </div>
 
-        {/* Leg mapping preview — only shown when template has LEG-scoped conditions */}
-        {hasLegConditions && selectedStrategy && mapping.length > 0 && (
+        {/* Leg mapping table */}
+        {hasLegConditions && selectedId && (
           <div className="rounded-lg border border-border-subtle overflow-hidden">
-            <div className="px-3 py-2 bg-surface-3 border-b border-border-subtle">
+            <div className="px-3 py-2 bg-surface-3 border-b border-border-subtle flex items-center gap-2">
               <span className="text-[10px] text-text-muted uppercase tracking-widest font-semibold">
-                Leg slot mapping
+                Leg mapping
               </span>
+              {legsFetching && <span className="text-[10px] text-text-muted">Loading…</span>}
             </div>
-            <div className="divide-y divide-border-subtle">
-              {mapping.map(({ slot, slotLabel, leg, group }) => (
-                <div key={slot} className="flex items-center gap-2 px-3 py-2">
-                  {/* Group badge */}
-                  <span className={cn(
-                    'text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0',
-                    group === 'Positional'
-                      ? 'bg-accent-blue/10 text-accent-blue'
-                      : 'bg-accent-purple/10 text-accent-purple'
-                  )}>
-                    {group === 'Positional' ? 'POS' : 'F&O'}
-                  </span>
-                  <span className={cn(
-                    'text-[11px] font-semibold w-28 shrink-0',
-                    slotLabel.startsWith('Buy') || slotLabel === 'Leg 1' || slotLabel === 'Leg 3'
-                      ? 'text-text-primary'
-                      : 'text-text-primary'
-                  )}>
-                    {slotLabel}
-                  </span>
-                  <ArrowRight size={11} className="text-text-muted shrink-0" />
-                  {leg ? (
-                    <span className="text-[11px] text-text-primary">
-                      {leg.instrument.strike != null ? `${leg.instrument.strike} ` : ''}
-                      <span className="font-medium">
-                        {inferInstrumentType(leg.instrument.symbol, leg.instrument.instrumentType)}
-                      </span>
-                      <span className={cn('ml-1 text-[10px]', leg.side === 'BUY' ? 'text-profit' : 'text-loss')}>
-                        ({leg.side})
-                      </span>
-                      <span className="ml-1 text-[10px] text-text-muted">{leg.instrument.symbol}</span>
-                    </span>
-                  ) : (
-                    <span className="text-[11px] text-accent-amber flex items-center gap-1">
-                      <AlertTriangle size={10} />
-                      No matching leg in this strategy
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
+
+            {normLegs.length === 0 && !legsFetching ? (
+              <div className="px-3 py-3 text-xs text-text-muted">No legs found for this strategy.</div>
+            ) : (
+              <div className="divide-y divide-border-subtle">
+                {mappingRows.map(({ slot, slotLabel, group }) => {
+                  const assignedId   = effectiveMap[slot] ?? ''
+                  const isAutoMapped = !!autoMapping[slot] && !manualMap[slot]
+                  const usedByAlerts = slotAlertNames[slot] ?? []
+
+                  return (
+                    <div key={slot} className="px-3 py-2.5 flex flex-col gap-1.5">
+                      {/* Slot header */}
+                      <div className="flex items-center gap-2">
+                        <span className={cn(
+                          'text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0',
+                          group === 'Positional'
+                            ? 'bg-accent-blue/10 text-accent-blue'
+                            : 'bg-accent-purple/10 text-accent-purple'
+                        )}>
+                          {group === 'Positional' ? 'POS' : 'F&O'}
+                        </span>
+                        <span className="text-[11px] font-semibold text-text-primary">{slotLabel}</span>
+                        {usedByAlerts.length > 0 && (
+                          <span className="text-[10px] text-text-muted truncate">
+                            — used by: {usedByAlerts.join(', ')}
+                          </span>
+                        )}
+                      </div>
+                      {/* Dropdown */}
+                      <div className="flex items-center gap-2 pl-1">
+                        <ArrowRight size={11} className="text-text-muted shrink-0" />
+                        <select
+                          value={assignedId}
+                          onChange={e => setManualMap(prev => ({ ...prev, [slot]: e.target.value }))}
+                          className={cn(
+                            'flex-1 px-2 py-1 text-[11px] rounded border bg-surface-2 text-text-primary focus:outline-none focus:border-accent-blue',
+                            assignedId
+                              ? isAutoMapped ? 'border-border-subtle' : 'border-accent-blue'
+                              : 'border-accent-amber text-accent-amber'
+                          )}
+                        >
+                          <option value="">— not mapped —</option>
+                          {normLegs.map(l => (
+                            <option key={l.id} value={l.id}>
+                              {l.side} {l.instrumentType}{l.strike != null ? ` ${l.strike}` : ''} · {l.symbol}
+                            </option>
+                          ))}
+                        </select>
+                        {isAutoMapped && assignedId && (
+                          <span className="text-[9px] text-profit shrink-0">auto ✓</span>
+                        )}
+                        {!assignedId && (
+                          <span className="text-[9px] text-accent-amber shrink-0">unset</span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
 
-        {unmapped.length > 0 && (
+        {unmappedCount > 0 && (
           <p className="text-xs text-accent-amber flex items-center gap-1.5">
             <AlertTriangle size={12} />
-            {unmapped.length} role{unmapped.length > 1 ? 's' : ''} not found in this strategy — conditions for those legs will not fire.
+            {unmappedCount} slot{unmappedCount > 1 ? 's' : ''} unmapped — those leg conditions will not fire.
           </p>
         )}
 
         {!hasLegConditions && (
           <p className="text-xs text-text-muted">
-            This template has no leg-specific conditions — it will apply identically to all strategies.
+            No leg-specific conditions — applies identically to any strategy.
           </p>
         )}
 
@@ -239,7 +317,7 @@ function ApplyModal({ template, onClose }: ApplyModalProps) {
           </button>
           <button
             onClick={() => applyMut.mutate()}
-            disabled={!selectedId || applyMut.isPending}
+            disabled={!selectedId || applyMut.isPending || legsFetching}
             className="px-4 py-1.5 text-xs font-medium bg-accent-blue hover:bg-blue-500 text-white rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {applyMut.isPending ? 'Applying…' : 'Apply Template'}

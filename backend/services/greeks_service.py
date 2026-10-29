@@ -60,11 +60,17 @@ class GreeksCache:
         self._cache: Dict[str, Dict[str, float]] = {}
         self._refresh_interval = refresh_interval
         self._task: Optional[asyncio.Task] = None
+        # Set to True after the first complete refresh cycle finishes.
+        # Delta/greek conditions must not evaluate until this is True —
+        # prevents spurious alerts from partial cache state at startup.
+        self.ready: bool = False
 
     # ── Public read interface (sync — called from hot path) ────────────────────
 
     def get(self, symbol: str) -> Optional[Dict[str, float]]:
         """Return {delta, gamma, theta, vega} or None if not cached."""
+        if not self.ready:
+            return None
         return self._cache.get(symbol)
 
     def get_delta(self, symbol: str) -> Optional[float]:
@@ -92,6 +98,10 @@ class GreeksCache:
         if not host.startswith("http"):
             host = f"http://{host}"
 
+        # Build into a staging dict first, then apply all at once.
+        # This prevents a partial-cache state where only some legs have greeks,
+        # which would make net_delta look skewed and fire spurious delta alerts.
+        staging: Dict[str, Dict[str, float]] = {}
         async with httpx.AsyncClient(timeout=8.0) as client:
             for symbol, exchange in symbols_exchanges:
                 try:
@@ -102,7 +112,7 @@ class GreeksCache:
                     data = resp.json()
                     if data.get("status") == "success":
                         g = data.get("greeks", {})
-                        self._cache[symbol] = {
+                        staging[symbol] = {
                             "delta": float(g.get("delta", 0.0)),
                             "gamma": float(g.get("gamma", 0.0)),
                             "theta": float(g.get("theta", 0.0)),
@@ -115,15 +125,19 @@ class GreeksCache:
                         )
                 except Exception as exc:
                     logger.debug("[GreeksCache] fetch failed %s: %s", symbol, exc)
+        # Atomic update — alert evaluation always sees a consistent snapshot
+        self._cache.update(staging)
 
     # ── Background refresh ─────────────────────────────────────────────────────
 
     async def _collect_option_symbols(self) -> List[Tuple[str, str]]:
-        """Collect all option symbols currently in the alert engine legs mirror."""
+        """Collect all option symbols from in-memory mirror AND directly from the DB."""
+        seen: set[str] = set()
+        result: List[Tuple[str, str]] = []
+
+        # Source 1: in-memory mirror (fast path — already loaded)
         try:
             from alerts.alert_pipeline import strategy_legs_mirror
-            seen: set[str] = set()
-            result: List[Tuple[str, str]] = []
             for legs in strategy_legs_mirror.values():
                 for leg in legs:
                     sym = leg.get("symbol", "")
@@ -131,15 +145,59 @@ class GreeksCache:
                     if sym and is_option(sym, opt) and sym not in seen:
                         seen.add(sym)
                         result.append((sym, _infer_exchange(sym)))
-            return result
         except Exception:
-            return []
+            pass
+
+        # Source 2: DB strategy_legs table — catches strategies created after last reload
+        try:
+            import json as _json
+            from core.database import AsyncSessionLocal
+            from models.relational import Strategy, StrategyLeg
+            from sqlalchemy import select
+
+            async with AsyncSessionLocal() as db:
+                rows = await db.execute(
+                    select(StrategyLeg.symbol, StrategyLeg.option_type)
+                    .join(Strategy, Strategy.id == StrategyLeg.strategy_id)
+                    .where(Strategy.status.in_(["active", "draft"]))
+                )
+                for sym, opt in rows.all():
+                    if sym and is_option(sym, opt or "") and sym not in seen:
+                        seen.add(sym)
+                        result.append((sym, _infer_exchange(sym)))
+
+            # Source 3: description JSON legs (strategies without strategy_legs rows)
+            async with AsyncSessionLocal() as db:
+                desc_rows = await db.execute(
+                    select(Strategy.description)
+                    .where(Strategy.status.in_(["active", "draft"]))
+                    .where(Strategy.description.isnot(None))
+                )
+                for (desc,) in desc_rows.all():
+                    try:
+                        for leg in _json.loads(desc).get("legs", []):
+                            inst = leg.get("instrument", {})
+                            sym = inst.get("symbol", "")
+                            opt = inst.get("instrumentType", "")
+                            if sym and is_option(sym, opt) and sym not in seen:
+                                seen.add(sym)
+                                result.append((sym, _infer_exchange(sym)))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return result
 
     async def _do_refresh(self) -> None:
         symbols = await self._collect_option_symbols()
         if not symbols:
+            self.ready = True   # no options to fetch — unblock immediately
             return
         await self.fetch_for_symbols(symbols)
+        if not self.ready:
+            self.ready = True
+            logger.info("[GreeksCache] first full refresh complete — delta conditions now active")
         logger.info("[GreeksCache] refreshed greeks for %d option symbols", len(symbols))
 
     async def _loop(self) -> None:
@@ -175,4 +233,4 @@ class GreeksCache:
 
 
 # Singleton
-greeks_cache = GreeksCache()
+greeks_cache = GreeksCache(refresh_interval=15)

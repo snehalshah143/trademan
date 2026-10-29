@@ -34,6 +34,9 @@ class LegRole(str, Enum):
     SHORT_PUT = "SHORT_PUT"
     LONG_CALL = "LONG_CALL"       # upper hedge wing
     LONG_PUT = "LONG_PUT"         # lower hedge wing
+    # Credit spread generic roles
+    PRIMARY = "PRIMARY"           # the short (sold) leg — bears premium risk
+    HEDGE = "HEDGE"               # the long (bought) leg — caps max loss
 
 
 class LegStatus(str, Enum):

@@ -36,20 +36,33 @@ class Config:
     """
 
     def __init__(self, yaml_path: str) -> None:
+        # 1. Load global settings as the base layer (optional — no error if absent)
+        global_path = (
+            Path(__file__).resolve().parent.parent / "config" / "global_settings.yaml"
+        )
+        self._data: dict[str, Any] = {}
+        if global_path.exists():
+            with open(global_path, "r", encoding="utf-8") as fh:
+                self._data = yaml.safe_load(fh) or {}
+            logger.debug("Global settings loaded from %s", global_path)
+
+        # 2. Overlay strategy-specific config (strategy values win over global)
         path = Path(yaml_path)
         if not path.exists():
             raise ConfigError(f"Configuration file not found: {yaml_path}")
-
         with open(path, "r", encoding="utf-8") as fh:
-            self._data: dict[str, Any] = yaml.safe_load(fh) or {}
+            self._data.update(yaml.safe_load(fh) or {})
 
-        logger.info(f"Configuration loaded from {yaml_path}")
+        logger.info("Configuration loaded from %s", yaml_path)
         self._validate_required_keys()
 
     # ---------------------------------------------------------------------------
     # Validation
     # ---------------------------------------------------------------------------
 
+    # Framework-level required keys — present in ALL strategy configs.
+    # Strategy-specific required keys are validated inside each strategy class
+    # using ``config.require("KEY")``.
     _REQUIRED_KEYS = [
         "OPENALGO_API_KEY",
         "OPENALGO_HOST",
@@ -58,29 +71,6 @@ class Config:
         "EXCHANGE_INDEX",
         "EXCHANGE_OPTIONS",
         "LOT_SIZE",
-        "NUM_LOTS",
-        "PRODUCT",
-        "MONITORING_INTERVAL",
-        "DEPLOYMENT_TIME",
-        "FRESH_WING_BUFFER",
-        "FRESH_WING_ROUNDING",
-        "ADJUSTMENT_BUFFER",
-        "ADJUSTMENT_ROUNDING",
-        "BREAKEVEN_BUFFER",
-        "PREMIUM_DOUBLE_FACTOR",
-        "RECOVERY_BUFFER",
-        "MAXIMUM_ADJUSTMENTS",
-        "GAP_DELAY",
-        "WING_TIGHTENING_TRIGGER",
-        "WING_TIGHTENING_DISTANCE",
-        "MTM_TRIGGER_LEVEL_1",
-        "MTM_LOCK_LEVEL_1",
-        "MTM_TRIGGER_LEVEL_2",
-        "MTM_LOCK_LEVEL_2",
-        "EARLY_EXIT_MTM",
-        "EXPIRY_EXIT_TIME",
-        "MAX_ORDER_RETRY",
-        "LOG_LEVEL",
     ]
 
     def _validate_required_keys(self) -> None:

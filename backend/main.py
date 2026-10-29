@@ -198,6 +198,7 @@ from api.routes import monitor_alerts as ma_router
 from api.routes import symbols as symbols_router
 from api.routes import oa_portfolio as oa_portfolio_router
 from api.routes import greeks as greeks_router
+from api.routes import algo_trades as algo_trades_router
 from ws.endpoint import router as ws_router
 
 app.include_router(strategies.router,         prefix="/api/v1")
@@ -214,6 +215,7 @@ app.include_router(ma_router.router,          prefix="/api/v1")
 app.include_router(symbols_router.router,     prefix="/api/v1")
 app.include_router(oa_portfolio_router.router, prefix="/api/v1")
 app.include_router(greeks_router.router,       prefix="/api/v1")
+app.include_router(algo_trades_router.router,  prefix="/api/v1")
 app.include_router(ws_router)
 
 

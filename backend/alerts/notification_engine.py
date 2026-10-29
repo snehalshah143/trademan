@@ -24,7 +24,8 @@ async def notify(rule: dict, ctx: dict) -> None:
     # fall back to the runtime context mirror as a secondary source.
     strategy_name = rule.get("strategy_name") or ctx.get("strategy_name", "")
     prefix        = f"{strategy_name} | " if strategy_name else ""
-    message       = f"{prefix}{name} triggered | MTM: {mtm:.0f} | Spot: {spot:.0f}"
+    spot_part     = f" | Spot: {spot:.0f}" if spot and spot > 0 else ""
+    message       = f"{prefix}{name} triggered | MTM: {mtm:.0f}{spot_part}"
 
     # ── Persist AlertEvent to DB (powers alert history endpoint) ───────────────
     try:

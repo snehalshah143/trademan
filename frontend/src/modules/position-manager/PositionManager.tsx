@@ -13,9 +13,10 @@ import { MetricCard } from '@/components/ui/MetricCard'
 import { StrategyRow } from './StrategyRow'
 import { BrokerPositionsTable } from './BrokerPositionsTable'
 import { OpenAlgoBuilderModal } from './OpenAlgoBuilderModal'
+import { AlgoTradesTab } from './AlgoTradesTab'
 import { fmtINRCompact, profitLossClass, cn } from '@/lib/utils'
 
-type Tab = 'strategies' | 'broker' | 'manual'
+type Tab = 'strategies' | 'broker' | 'manual' | 'algo'
 
 /** Convert an OpenAlgo portfolio entry into a Trademan Strategy with a proper UUID. */
 function oaEntryToStrategy(entry: OAPortfolioEntry): Strategy {
@@ -259,6 +260,17 @@ export function PositionManager() {
             </span>
           )}
         </button>
+        <button
+          onClick={() => setTab('algo')}
+          className={cn(
+            'px-4 py-2.5 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5',
+            tab === 'algo'
+              ? 'border-accent-amber text-accent-amber'
+              : 'border-transparent text-text-muted hover:text-text-secondary'
+          )}
+        >
+          Algo Trades
+        </button>
       </div>
 
       {/* Broker Positions tab — always mounted to keep refetchInterval alive */}
@@ -378,6 +390,9 @@ export function PositionManager() {
           />
         </>
       )}
+
+      {/* Algo Trades tab */}
+      {tab === 'algo' && <AlgoTradesTab />}
 
       {/* Strategies tab */}
       {tab === 'strategies' && (

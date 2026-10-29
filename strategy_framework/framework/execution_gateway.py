@@ -33,6 +33,7 @@ from ..utils.constants import (
     ORDER_POLL_INTERVAL_SECONDS,
     TERMINAL_ORDER_STATUSES,
 )
+from ..utils.helper import now_ist
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -134,8 +135,7 @@ class ExecutionGateway:
                     leg.order_id = result.order_id
                     leg.entry_price = result.fill_price
                     leg.status = LegStatus.OPEN
-                    from datetime import datetime
-                    leg.entry_time = datetime.now()
+                    leg.entry_time = now_ist()
                     logger.info(f"Leg filled (attempt {attempt}): {result}")
                     return result
                 else:
@@ -189,6 +189,100 @@ class ExecutionGateway:
 
         return results
 
+    def execute_legs_hedge_first(
+        self,
+        legs: list[OptionLeg],
+        strategy_id: str,
+        context: StrategyContext,
+    ) -> list[OrderResult]:
+        """
+        Execute a credit spread entry following the HEDGE-first rule.
+
+        For a credit spread the HEDGE is the BUY leg and the PRIMARY is the
+        SELL leg.  Order of execution:
+        1. Execute the HEDGE (BUY) leg first — margin benefit.
+        2. Verify fill.  Abort if rejected.
+        3. Execute the PRIMARY (SELL) leg.
+
+        This is the correct entry order for directional credit spreads.
+        Equivalent to ``execute_legs_buy_first`` but semantically explicit.
+        """
+        from ..models.option_leg import LegRole
+        hedge_legs   = [l for l in legs if l.role == LegRole.HEDGE]
+        primary_legs = [l for l in legs if l.role == LegRole.PRIMARY]
+        # Fall back to action-based ordering if roles aren't set
+        if not hedge_legs and not primary_legs:
+            return self.execute_legs_buy_first(legs, strategy_id, context)
+
+        results: list[OrderResult] = []
+        logger.info("Executing %d HEDGE (BUY) leg(s) first …", len(hedge_legs))
+        for leg in hedge_legs:
+            results.append(self.execute_leg(leg, strategy_id, context))
+
+        logger.info("Executing %d PRIMARY (SELL) leg(s) …", len(primary_legs))
+        for leg in primary_legs:
+            results.append(self.execute_leg(leg, strategy_id, context))
+
+        return results
+
+    def close_legs_short_first(
+        self,
+        legs: list[OptionLeg],
+        strategy_id: str,
+        context: StrategyContext,
+    ) -> list[OrderResult]:
+        """
+        Close a credit spread following the SHORT-first exit rule.
+
+        On exit the PRIMARY (short/SELL) leg must be bought back FIRST to
+        release margin before unwinding the HEDGE (long/BUY) leg.
+
+        Sequence:
+        1. Buy back all PRIMARY (SELL) legs.
+        2. Verify fills.
+        3. Sell all HEDGE (BUY) legs.
+
+        Returns list of OrderResult in execution order.
+        """
+        from ..models.option_leg import LegRole, LegStatus
+        open_legs = [l for l in legs if l.status == LegStatus.OPEN]
+
+        primary_legs = [l for l in open_legs if l.role == LegRole.PRIMARY]
+        hedge_legs   = [l for l in open_legs if l.role == LegRole.HEDGE]
+
+        # Fallback: short legs = SELL action
+        if not primary_legs and not hedge_legs:
+            primary_legs = [l for l in open_legs if l.action == LegAction.SELL]
+            hedge_legs   = [l for l in open_legs if l.action == LegAction.BUY]
+
+        results: list[OrderResult] = []
+        logger.info("Closing %d PRIMARY (SHORT) leg(s) first …", len(primary_legs))
+        for leg in primary_legs:
+            results.append(self.close_leg(leg, strategy_id, context))
+
+        logger.info("Closing %d HEDGE (LONG) leg(s) …", len(hedge_legs))
+        for leg in hedge_legs:
+            results.append(self.close_leg(leg, strategy_id, context))
+
+        return results
+
+    def can_enter(self, execution_mode: str) -> bool:
+        """
+        Return True if entry execution is allowed for the given 4-mode config.
+
+        Modes
+        -----
+        MONITOR_ONLY       — no execution (log only)
+        ENTRY_EXEC_MONITOR — entries executed, exits logged only
+        EXIT_EXEC_MONITOR  — exits executed, entries logged only
+        FULL_EXEC          — both entries and exits executed
+        """
+        return execution_mode in ("ENTRY_EXEC_MONITOR", "FULL_EXEC")
+
+    def can_exit(self, execution_mode: str) -> bool:
+        """Return True if exit execution is allowed for the given 4-mode config."""
+        return execution_mode in ("EXIT_EXEC_MONITOR", "FULL_EXEC")
+
     def close_leg(
         self,
         leg: OptionLeg,
@@ -221,8 +315,7 @@ class ExecutionGateway:
         result = self.execute_leg(close_leg, strategy_id, context)
         if result.success:
             leg.exit_price = result.fill_price
-            from datetime import datetime
-            leg.exit_time = datetime.now()
+            leg.exit_time = now_ist()
             leg.status = LegStatus.CLOSED
 
         return result

@@ -1,0 +1,167 @@
+# =============================================================================
+# Crudeoil Intraday Futures 3-Min — EXECUTION script settings
+# =============================================================================
+# This config is used by:
+#   strategies/directional/commodity/crudeoil_intraday_future_long_directional_3Min/
+#     execution_crudeoil_intraday_future_long_directional_3Min.py
+#
+# Strategy uses triple timeframes:
+#   M15 (15-min candles) — base condition gate (RSI, MACD-A/B, Supertrend)
+#   M3  (3-min candles)  — trend + momentum (Supertrend, RSI, MACD)
+#   M1  (1-min candles)  — RSI, RSI-EMAs, MACD-A/B, Supertrend (entry + exit)
+#
+# Set EXECUTION_MODE to one of:
+#   MONITOR_ONLY        — log signals only; no orders placed (safe default)
+#   ENTRY_EXEC_MONITOR  — auto-enter on signal; monitoring script handles exit
+#   EXIT_EXEC_MONITOR   — paper entry; monitoring script places live exits
+#   FULL_EXEC           — fully automated entry + exit
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# OpenAlgo connection  →  set once in config/global_settings.yaml
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Strategy identity
+# ---------------------------------------------------------------------------
+STRATEGY_NAME: "COIL3_INTRADAY_FUT"
+STRATEGY_ID_PREFIX: "COIL3"                 # strategy_id = COIL3_YYYYMMDD
+
+# ---------------------------------------------------------------------------
+# Execution mode
+# ---------------------------------------------------------------------------
+EXECUTION_MODE: "MONITOR_ONLY"              # MONITOR_ONLY | ENTRY_EXEC_MONITOR | EXIT_EXEC_MONITOR | FULL_EXEC
+
+# ---------------------------------------------------------------------------
+# Instrument (MCX Crudeoil Futures)
+# ---------------------------------------------------------------------------
+UNDERLYING: "CRUDEOIL"
+EXCHANGE: "MCX"
+EXCHANGE_INDEX: "MCX"                       # required by Config validator; not used for futures
+EXCHANGE_OPTIONS: "MCX"                     # required by Config validator; not used for futures
+INSTRUMENT_TYPE: "futures"                  # OpenAlgo instrument type for commodity futures
+PRODUCT: "MIS"                              # MIS = intraday; NRML = positional/overnight
+LOT_SIZE: 100                               # 100 barrels per lot (MCX standard)
+
+# ---------------------------------------------------------------------------
+# Expiry selection
+# ---------------------------------------------------------------------------
+DTE_MIN: 3                                  # minimum days-to-expiry; roll if nearest < this
+
+# ---------------------------------------------------------------------------
+# Trade direction
+# ---------------------------------------------------------------------------
+TRADE_DIRECTION: "BOTH"                     # LONG | SHORT | BOTH
+
+# ---------------------------------------------------------------------------
+# Position sizing
+# ---------------------------------------------------------------------------
+FIXED_LOTS: 1                               # number of lots to trade
+MAX_LOTS: 5                                 # hard cap
+
+DEPLOYED_CAPITAL: 0                         # 0 = skip margin preflight check
+
+# ---------------------------------------------------------------------------
+# Entry conditions (evaluated on every 1-min candle close)
+# ---------------------------------------------------------------------------
+# ALL four conditions must be true simultaneously:
+#
+# 1. M3-Supertrend-Direction == -1
+#    (M3-Close > M3-Supertrend → 3-min trend bullish)
+#
+# 2. M3-MACD(MACD_FAST, MACD_SLOW, MACD_SIGNAL) > M3-MACD-Signal
+#    OR  M3-RSI14-EMA(RSI_EMA_FAST_PERIOD) > M3-RSI14-EMA(RSI_EMA_SLOW_PERIOD)
+#    (M3 momentum: MACD or RSI-EMA cross)
+#
+# 3. M3-RSI14 > M3-RSI14-EMA(RSI_EMA_SLOW_PERIOD)
+#    (M3 RSI confirmation)
+#
+# 4. M1-RSI14 > M1-RSI14-EMA(RSI_EMA_SLOW_PERIOD)
+#    OR  M1-Supertrend-Direction == -1
+#    (1-min momentum or trend confirmation)
+#
+# M3 indicators persist their last value between 3-min closes.
+# Entry fires on the FIRST 1-min close where all 4 conditions hold.
+# ---------------------------------------------------------------------------
+
+# RSI (applied to M1 closes)
+RSI_PERIOD: 14
+
+# RSI EMA (two periods applied to the RSI-14 series)
+RSI_EMA_FAST_PERIOD: 8
+RSI_EMA_SLOW_PERIOD: 21
+
+# MACD (applied to M1 closes)
+MACD_FAST: 8
+MACD_SLOW: 21
+MACD_SIGNAL: 5
+
+# Supertrend (applied to M3 candles)
+SUPERTREND_PERIOD: 11
+SUPERTREND_FACTOR: 2.5
+
+# ---------------------------------------------------------------------------
+# Warm-up
+# ---------------------------------------------------------------------------
+WARMUP_BARS_M1:  100                        # historical 1-min bars to seed RSI/MACD/EMA
+WARMUP_BARS_M3:  300                        # 300 × 3-min = 900 min (~full MCX session) — required for correct Supertrend state
+WARMUP_BARS_M15:  30                        # 30 × 15-min = 450 min — enough for M15 Supertrend + MACD seed
+
+# ---------------------------------------------------------------------------
+# Entry timing window (IST)
+# MCX commodity trading: 09:10 – 23:00 IST
+# ---------------------------------------------------------------------------
+ENTRY_START_TIME: "09:05"
+ENTRY_END_TIME: "23:00"
+
+# ---------------------------------------------------------------------------
+# Order execution
+# ---------------------------------------------------------------------------
+MAX_ORDER_RETRY: 3
+ORDER_POLL_INTERVAL: 2.0                    # seconds between order status polls
+ORDER_FILL_TIMEOUT: 60.0                    # seconds before declaring fill timeout
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+DATABASE_URL: "sqlite:///logs/strategies.db"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOG_FILE: "logs/coil3_execution.log"
+LOG_LEVEL: "DEBUG"
+
+# ---------------------------------------------------------------------------
+# Price EMA periods  (used by indicator engine — must match monitoring_settings.yaml)
+# ---------------------------------------------------------------------------
+M3_PRICE_EMA_FAST: 8                        # EMA8 of M3-Close price
+M3_PRICE_EMA_SLOW: 21                       # EMA21 of M3-Close price
+M1_REENTRY_EMA_FAST: 21                     # EMA21 of M1-Close price
+M1_REENTRY_EMA_SLOW: 34                     # EMA34 of M1-Close price
+
+# ---------------------------------------------------------------------------
+# M15 MACD parameters  (base condition gate)
+# ---------------------------------------------------------------------------
+M15_MACD_A_FAST: 8
+M15_MACD_A_SLOW: 21
+M15_MACD_A_SIGNAL: 5
+M15_MACD_B_FAST: 5
+M15_MACD_B_SLOW: 11
+M15_MACD_B_SIGNAL: 3
+
+# ---------------------------------------------------------------------------
+# M1 MACD parameters  (exit momentum-break condition)
+# ---------------------------------------------------------------------------
+M1_MACD_A_FAST: 8
+M1_MACD_A_SLOW: 21
+M1_MACD_A_SIGNAL: 5
+M1_MACD_B_FAST: 21
+M1_MACD_B_SLOW: 34
+M1_MACD_B_SIGNAL: 8
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+# Telegram settings  →  set in config/global_settings.yaml
+# Override here to use different settings for this strategy only.

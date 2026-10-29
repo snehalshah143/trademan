@@ -62,8 +62,12 @@ class OpenAlgoClient:
         logger.info(f"OpenAlgoClient initialised — host={host}")
 
     def close(self) -> None:
-        """Release the underlying HTTP connection pool."""
-        self._client.close()
+        """Disconnect WebSocket if open. REST client has no explicit close."""
+        try:
+            if getattr(self._client, "connected", False):
+                self._client.disconnect()
+        except Exception:
+            pass
 
     def __enter__(self) -> "OpenAlgoClient":
         return self
@@ -245,3 +249,139 @@ class OpenAlgoClient:
         )
         self._check("openposition", raw)
         return int(raw.get("quantity", 0))
+
+    def modify_order(
+        self,
+        order_id: str,
+        strategy: str,
+        symbol: str,
+        exchange: str,
+        quantity: int,
+        price: float,
+        price_type: str = "LIMIT",
+        product: str = "NRML",
+    ) -> str:
+        """
+        Modify an existing order (e.g. adjust limit price).
+
+        Returns the (possibly new) broker order ID.
+        Raises ``OpenAlgoError`` on failure.
+        """
+        raw = self._client.modifyorder(
+            order_id=order_id,
+            strategy=strategy,
+            symbol=symbol,
+            exchange=exchange,
+            quantity=quantity,
+            price=price,
+            price_type=price_type,
+            product=product,
+        )
+        self._check("modifyorder", raw)
+        new_id = raw.get("orderid", order_id)
+        logger.info(f"Order modified: orderid={order_id} → new_id={new_id}")
+        return str(new_id)
+
+    def ping(self) -> bool:
+        """
+        Check connectivity to the OpenAlgo server.
+
+        Returns ``True`` if the server responds successfully, ``False`` otherwise.
+        Never raises.
+        """
+        try:
+            raw = self._client.funds()
+            return raw.get("status") != "error"
+        except Exception as exc:
+            logger.debug(f"ping: OpenAlgo unreachable — {exc}")
+            return False
+
+    def get_history(
+        self,
+        symbol: str,
+        exchange: str,
+        interval: str = "1m",
+        start_date: str = "",
+        end_date: str = "",
+        source: str = "api",
+        warmup_bars: int = 0,
+    ) -> list[dict]:
+        """
+        Fetch historical OHLCV candle data for *symbol*.
+
+        Parameters
+        ----------
+        symbol      : e.g. ``"NIFTY"``
+        exchange    : e.g. ``"NSE_INDEX"``
+        interval    : Candle interval — ``"1m"``, ``"5m"``, ``"15m"``, ``"1h"``, ``"1d"``
+        start_date  : ``"YYYY-MM-DD"`` (empty = auto-calculated from warmup_bars)
+        end_date    : ``"YYYY-MM-DD"`` (empty = today)
+        warmup_bars : If > 0 and start_date is empty, auto-calculate the start date
+                      so the window comfortably covers this many bars of *interval*.
+                      NSE trading day = 375 minutes.  Calendar days = trading days
+                      × 7/5 (weekend ratio) + 3 holiday buffer, minimum 5 days.
+
+        Returns
+        -------
+        List of dicts with keys: ``timestamp``, ``open``, ``high``, ``low``,
+        ``close``, ``volume``.
+        """
+        import math
+        import re
+        from datetime import date, timedelta
+        import pandas as pd
+
+        end = date.today().strftime("%Y-%m-%d") if not end_date else end_date
+
+        # ── Auto-calculate start_date from warmup_bars ───────────────────────
+        if not start_date:
+            if warmup_bars > 0:
+                # Parse interval to minutes-per-bar
+                m = re.match(r"^(\d+)([mhds])", interval.lower())
+                if m:
+                    n, unit = int(m.group(1)), m.group(2)
+                    mins_per_bar = {"m": n, "h": n * 60, "d": 375, "s": max(1, n // 60)}.get(unit, n)
+                else:
+                    mins_per_bar = 1
+
+                trading_minutes_per_day = 375          # NSE 9:15–3:30
+                bars_per_day   = trading_minutes_per_day / mins_per_bar
+                trading_days   = max(1, math.ceil(warmup_bars / bars_per_day))
+                calendar_days  = max(5, math.ceil(trading_days * 7 / 5) + 3)
+                start_date = (date.today() - timedelta(days=calendar_days)).strftime("%Y-%m-%d")
+                logger.info(
+                    "get_history: warmup_bars=%d interval=%s → %d trading days → "
+                    "%d calendar days → start=%s",
+                    warmup_bars, interval, trading_days, calendar_days, start_date,
+                )
+            else:
+                start_date = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        raw = self._client.history(
+            symbol=symbol, exchange=exchange, interval=interval,
+            start_date=start_date, end_date=end,
+        )
+
+        # SDK returns a DataFrame on success, a dict on error
+        if isinstance(raw, dict):
+            self._check("history", raw)
+            return []
+
+        if isinstance(raw, pd.DataFrame):
+            records = []
+            for ts, row in raw.iterrows():
+                records.append({
+                    "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                    "open":   float(row.get("open",   0)),
+                    "high":   float(row.get("high",   0)),
+                    "low":    float(row.get("low",    0)),
+                    "close":  float(row.get("close",  0)),
+                    "volume": int(row.get("volume",   0)),
+                })
+            logger.info(
+                "get_history: %s %s → %d bars (window %s → %s)",
+                symbol, interval, len(records), start_date, end,
+            )
+            return records
+
+        return []

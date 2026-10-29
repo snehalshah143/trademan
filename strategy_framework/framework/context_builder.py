@@ -26,6 +26,40 @@ from ..utils.constants import INSTRUMENT_OPTIONS
 from ..utils.helper import now_ist, openalgo_fmt_to_date, safe_float
 from ..utils.logger import get_logger
 
+
+# ---------------------------------------------------------------------------
+# Standalone chain parser — importable by any script that receives a raw
+# option chain response dict and needs a typed list of OptionChainEntry.
+# ---------------------------------------------------------------------------
+
+def parse_chain_entries(chain_response: dict) -> list[OptionChainEntry]:
+    """
+    Convert the raw ``chain`` list from an OpenAlgo option chain response
+    into a list of typed ``OptionChainEntry`` objects.
+
+    Parameters
+    ----------
+    chain_response : The full response dict from ``OpenAlgoClient.get_option_chain()``.
+
+    Returns
+    -------
+    List of ``OptionChainEntry``, one per strike row in the chain.
+    """
+    entries: list[OptionChainEntry] = []
+    for item in chain_response.get("chain", []):
+        ce = item.get("ce") or {}
+        pe = item.get("pe") or {}
+        entries.append(OptionChainEntry(
+            strike=float(item.get("strike", 0)),
+            ce_symbol=ce.get("symbol"),
+            ce_ltp=safe_float(ce.get("ltp")) if ce.get("ltp") is not None else None,
+            ce_label=ce.get("label"),
+            pe_symbol=pe.get("symbol"),
+            pe_ltp=safe_float(pe.get("ltp")) if pe.get("ltp") is not None else None,
+            pe_label=pe.get("label"),
+        ))
+    return entries
+
 logger = get_logger(__name__)
 
 
@@ -186,23 +220,8 @@ class ContextBuilder:
     # ---------------------------------------------------------------------------
 
     def _parse_chain(self, chain_response: dict) -> list[OptionChainEntry]:
-        """Convert the raw ``chain`` list into ``OptionChainEntry`` objects."""
-        entries: list[OptionChainEntry] = []
-        for item in chain_response.get("chain", []):
-            ce = item.get("ce") or {}
-            pe = item.get("pe") or {}
-            entries.append(
-                OptionChainEntry(
-                    strike=float(item.get("strike", 0)),
-                    ce_symbol=ce.get("symbol"),
-                    ce_ltp=safe_float(ce.get("ltp")) if ce.get("ltp") is not None else None,
-                    ce_label=ce.get("label"),
-                    pe_symbol=pe.get("symbol"),
-                    pe_ltp=safe_float(pe.get("ltp")) if pe.get("ltp") is not None else None,
-                    pe_label=pe.get("label"),
-                )
-            )
-        return entries
+        """Delegate to the module-level ``parse_chain_entries`` function."""
+        return parse_chain_entries(chain_response)
 
     # ---------------------------------------------------------------------------
     # Expiry helpers

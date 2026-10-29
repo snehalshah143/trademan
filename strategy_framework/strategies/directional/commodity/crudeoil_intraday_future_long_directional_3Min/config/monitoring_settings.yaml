@@ -1,0 +1,193 @@
+# =============================================================================
+# Crudeoil Intraday Futures 3-Min — MONITORING script settings
+# =============================================================================
+# This config is used by:
+#   strategies/directional/commodity/crudeoil_intraday_future_long_directional_3Min/
+#     monitoring_crudeoil_intraday_future_long_directional_3Min.py
+#
+# Assumed: a position has already been entered (by the execution script).
+# This script recovers the open futures leg from DB, subscribes to WebSocket
+# ticks, maintains triple CandleBuilders (M1 + M3 + M15), and evaluates exit
+# conditions on each closed 1-min candle.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# OpenAlgo connection  →  set once in config/global_settings.yaml
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Strategy identity — MUST match execution script's STRATEGY_ID_PREFIX
+# ---------------------------------------------------------------------------
+STRATEGY_NAME: "COIL3_INTRADAY_FUT"
+STRATEGY_ID_PREFIX: "COIL3"
+
+# ---------------------------------------------------------------------------
+# Execution mode for exits
+# ---------------------------------------------------------------------------
+EXECUTION_MODE: "MONITOR_ONLY"              # MONITOR_ONLY | EXIT_EXEC_MONITOR | FULL_EXEC
+
+# ---------------------------------------------------------------------------
+# Instrument
+# ---------------------------------------------------------------------------
+UNDERLYING: "CRUDEOIL"
+EXCHANGE: "MCX"
+EXCHANGE_INDEX: "MCX"                       # required by Config validator; not used for futures
+EXCHANGE_OPTIONS: "MCX"                     # required by Config validator; not used for futures
+INSTRUMENT_TYPE: "futures"
+PRODUCT: "MIS"
+LOT_SIZE: 100
+
+# ---------------------------------------------------------------------------
+# Indicators (must match execution script values — same engine, same params)
+# ---------------------------------------------------------------------------
+RSI_PERIOD: 14
+RSI_EMA_FAST_PERIOD: 8
+RSI_EMA_SLOW_PERIOD: 21
+MACD_FAST: 8
+MACD_SLOW: 21
+MACD_SIGNAL: 5
+SUPERTREND_PERIOD: 11
+SUPERTREND_FACTOR: 2.5
+
+# ---------------------------------------------------------------------------
+# Warm-up — fetches M1, M3, and M15 history
+# ---------------------------------------------------------------------------
+WARMUP_BARS_M1:  100                        # historical 1-min bars to seed RSI/MACD/EMA
+WARMUP_BARS_M3:  300                        # 300 × 3-min = 900 min (~full MCX session)
+WARMUP_BARS_M15:  30                        # 30 × 15-min = 450 min — enough for M15 indicators
+
+# ---------------------------------------------------------------------------
+# Exit conditions — stop-loss parameters
+# ---------------------------------------------------------------------------
+
+# Initial hard SL: exit if M1-Close drops this many points below entry
+INITIAL_SL_POINTS: 30
+
+# Swing low: exit if M1-Close < minimum low of the last N 3-min candles
+# (same window also used as trailing SL floor alongside M1 Supertrend)
+SWING_3MIN_CANDLES: 2
+
+# M3-RSI14 cross below M3-RSI14-EMA21: confirmed over 2 consecutive 1-min
+# candle closes. (no config needed — hardcoded ConfirmationCounter(required=2))
+
+# ---------------------------------------------------------------------------
+# Trailing stop-loss  (MultiPhaseTrailSL)
+# ---------------------------------------------------------------------------
+# Two trailing SL components are checked after initial SL:
+#   a) M1-Supertrend(11,2.5)        — exit if M1-Close < M1-ST
+#   b) Multi-phase step trail below — exit if M1-Close < trail SL
+#
+# Multi-phase trail (MultiPhaseTrailSL):
+#
+# Phase 0 (before Phase 1 trigger):
+#   SL fixed at: entry_price - INITIAL_SL_POINTS  (e.g. 5000 - 30 = 4970)
+#
+# Phase 1 (price rises TRAIL_PHASE1_TRIGGER pts from entry):
+#   SL = initial_sl + TRAIL_PHASE1_SL_ADD  (e.g. 4970 + 30 = 5000, break-even)
+#
+# Phase 2 (price rises TRAIL_PHASE2_TRIGGER pts from entry):
+#   SL = entry + TRAIL_PHASE2_ENTRY_OFFSET  (e.g. 5000 + 25 = 5025)
+#   Thereafter: every TRAIL_STEP_POINTS price rise → SL + TRAIL_STEP_SL_POINTS
+#
+# Example (default params):
+#   Entry  @5000 → SL = 4970  (Phase 0, -30)
+#   Price  @5030 → SL = 5000  (Phase 1, break-even)
+#   Price  @5050 → SL = 5025  (Phase 2, entry+25)
+#   Price  @5055 → SL = 5032  (step ratchet, +7)
+#   Price  @5060 → SL = 5039  (step ratchet, +7)
+#   Price  @5065 → SL = 5046  (step ratchet, +7)
+# ---------------------------------------------------------------------------
+TRAIL_PHASE1_TRIGGER: 30          # pts above entry to activate Phase 1
+TRAIL_PHASE1_SL_ADD: 30           # SL added to initial_sl on Phase 1 activation (break-even)
+TRAIL_PHASE2_TRIGGER: 50          # pts above entry to activate Phase 2
+TRAIL_PHASE2_ENTRY_OFFSET: 25     # SL = entry + this value on Phase 2 activation
+TRAIL_STEP_POINTS: 5              # price must rise this many pts to trigger a ratchet step
+TRAIL_STEP_SL_POINTS: 7           # how many pts SL advances per ratchet step
+
+# ---------------------------------------------------------------------------
+# Profit target
+# ---------------------------------------------------------------------------
+# If price moves PROFIT_TARGET_POINTS in trade direction → exit (book profit).
+# Set to 0 to disable.
+# ---------------------------------------------------------------------------
+PROFIT_TARGET_POINTS: 100
+
+# ---------------------------------------------------------------------------
+# Intraday square-off
+# ---------------------------------------------------------------------------
+TRADE_VALIDITY: "INTRADAY"                  # INTRADAY | POSITIONAL
+INTRADAY_EXIT_TIME: "23:00"                 # Force exit at this IST time
+MTM_SNAPSHOT_INTERVAL: 1                    # Save MTM to DB every N 1-min candles (1 = every candle, ~1 min updates)
+                                            # MCX MIS auto sq-off ~23:00-23:15; exit early to
+                                            # avoid broker square-off at bad price
+
+# ---------------------------------------------------------------------------
+# Order execution
+# ---------------------------------------------------------------------------
+MAX_ORDER_RETRY: 3
+ORDER_POLL_INTERVAL: 2.0
+ORDER_FILL_TIMEOUT: 60.0
+
+# ---------------------------------------------------------------------------
+# Persistence — MUST point to same DB as execution script
+# ---------------------------------------------------------------------------
+DATABASE_URL: "sqlite:///logs/strategies.db"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOG_FILE: "logs/coil3_monitoring.log"
+
+LOG_LEVEL: "DEBUG"
+
+# ---------------------------------------------------------------------------
+# Re-entry  (after profit target booking)
+# ---------------------------------------------------------------------------
+# After booking profit at PROFIT_TARGET_POINTS, the script switches to
+# WAITING_REENTRY state and checks these conditions on every 1-min candle.
+# Set REENTRY_ENABLED: false to disable completely.
+#
+# LONG re-entry conditions (all must be true):
+#   1. M3-EMA8(price) > M3-EMA21(price)       [M3 price EMA alignment bullish]
+#   2. M3-Close <= M3-EMA8(price)              [pullback touches 8-EMA from above]
+#   3. M3-Supertrend-Direction == -1           [M3 trend still bullish]
+#   4. M3-MACD > Signal  OR  M3-RSI-EMA8 > M3-RSI-EMA21  [M3 momentum]
+#   5. M3-RSI14 > M3-RSI14-EMA21              [M3 RSI confirmation]
+#   6. M1-EMA21(price) > M1-EMA34(price)      [1-min EMA filter]
+#
+# SHORT re-entry: all conditions reversed.
+# ---------------------------------------------------------------------------
+REENTRY_ENABLED: true
+MAX_REENTRIES: 3                            # max re-entries per session
+
+# Price EMA periods for re-entry conditions
+M3_PRICE_EMA_FAST: 8                        # EMA8 of M3-Close price (condition 1 & 2)
+M3_PRICE_EMA_SLOW: 21                       # EMA21 of M3-Close price (condition 1)
+M1_REENTRY_EMA_FAST: 21                     # EMA21 of M1-Close price (condition 6)
+M1_REENTRY_EMA_SLOW: 34                     # EMA34 of M1-Close price (condition 6)
+
+# ---------------------------------------------------------------------------
+# M15 MACD parameters  (base condition gate — must match execution_settings.yaml)
+# ---------------------------------------------------------------------------
+M15_MACD_A_FAST: 8
+M15_MACD_A_SLOW: 21
+M15_MACD_A_SIGNAL: 5
+M15_MACD_B_FAST: 5
+M15_MACD_B_SLOW: 11
+M15_MACD_B_SIGNAL: 3
+
+# ---------------------------------------------------------------------------
+# M1 MACD parameters  (exit momentum-break — must match execution_settings.yaml)
+# ---------------------------------------------------------------------------
+M1_MACD_A_FAST: 8
+M1_MACD_A_SLOW: 21
+M1_MACD_A_SIGNAL: 5
+M1_MACD_B_FAST: 21
+M1_MACD_B_SLOW: 34
+M1_MACD_B_SIGNAL: 8
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+# Telegram settings  →  set in config/global_settings.yaml
+# Override here to use different settings for this strategy only.

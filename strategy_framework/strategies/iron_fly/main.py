@@ -87,6 +87,7 @@ def main() -> None:
     log_file = config.get_str("LOG_FILE", "logs/iron_fly.log")
     log_level = config.get_str("LOG_LEVEL", "INFO")
     setup_logger("strategy_framework", log_file=log_file, level=log_level)
+    setup_logger("strategies",         log_file=log_file, level=log_level)
     logger = get_logger("strategy_framework.main")
 
     logger.info("=" * 52)

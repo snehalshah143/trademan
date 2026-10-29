@@ -199,7 +199,7 @@ def build_option_symbol(
     -------
     str — e.g. ``"NIFTY31JUL2525000CE"``
     """
-    return f"{underlying}{expiry}{int(strike)}{option_type}"
+    return f"{underlying}{expiry.replace('-', '').upper()}{int(strike)}{option_type}"
 
 
 # ---------------------------------------------------------------------------

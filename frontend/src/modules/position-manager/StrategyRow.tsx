@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Bell, ShieldAlert, X, Trash2 } from 'lucide-react'
 import { fmtINRCompact, profitLossClass, cn } from '@/lib/utils'
 import { ExpiryGroup } from './ExpiryGroup'
@@ -10,6 +11,7 @@ import type { LiveStrategy } from '@hooks/useLivePositions'
 import type { AlertSeverity } from '@/types/domain'
 import { useAlertStore } from '@store/alertStore'
 import { useStrategyGreeks } from '@hooks/useStrategyGreeks'
+import { useLTPStore } from '@store/ltpStore'
 
 interface Props {
   strategy:    LiveStrategy
@@ -58,6 +60,33 @@ export function StrategyRow({ strategy, onSelect, isSelected, onRemove }: Props)
   }, {})
 
   const netPnl = strategy.liveMTM
+
+  // ── Iron Fly / Straddle breakeven ─────────────────────────────────────────
+  // Upper BE = Sell CE strike + (Sell CE entry + Sell PE entry)
+  // Lower BE = Sell PE strike − (Sell CE entry + Sell PE entry)
+  const ltpMap = useLTPStore(s => s.ltpMap)
+  const spot = ltpMap[strategy.underlyingSymbol ?? '']?.tick.ltp ?? 0
+
+  const breakeven = useMemo(() => {
+    const sellCE = strategy.legs.find(
+      l => l.side === 'SELL' && l.instrument.instrumentType === 'CE'
+    )
+    const sellPE = strategy.legs.find(
+      l => l.side === 'SELL' && l.instrument.instrumentType === 'PE'
+    )
+    if (!sellCE || !sellPE) return null
+    const ceStrike = sellCE.instrument.strike
+    const peStrike = sellPE.instrument.strike
+    const ceEntry  = sellCE.entryPrice ?? 0
+    const peEntry  = sellPE.entryPrice ?? 0
+    if (!ceStrike || !peStrike || (ceEntry === 0 && peEntry === 0)) return null
+    const totalPremium = ceEntry + peEntry
+    const upper = ceStrike + totalPremium
+    const lower = peStrike - totalPremium
+    const upperPct = spot > 0 ? ((upper - spot) / spot) * 100 : null
+    const lowerPct = spot > 0 ? ((spot - lower) / spot) * 100 : null
+    return { upper, lower, upperPct, lowerPct }
+  }, [strategy.legs, spot])
 
   const { data: greeksData } = useStrategyGreeks(strategy.id)
   const legDeltaMap = useMemo<Record<string, number | null>>(() => {
@@ -127,6 +156,24 @@ export function StrategyRow({ strategy, onSelect, isSelected, onRemove }: Props)
                 </span>
               </div>
             )}
+            {breakeven && (
+              <div className="flex items-center gap-1.5 text-xs text-text-muted border-l border-border-subtle pl-3">
+                <span>BE</span>
+                <span className="num text-loss font-medium">
+                  {breakeven.lower.toFixed(0)}
+                  {breakeven.lowerPct != null && (
+                    <span className="ml-0.5 opacity-60">({breakeven.lowerPct.toFixed(1)}%)</span>
+                  )}
+                </span>
+                <span className="opacity-40">—</span>
+                <span className="num text-profit font-medium">
+                  {breakeven.upper.toFixed(0)}
+                  {breakeven.upperPct != null && (
+                    <span className="ml-0.5 opacity-60">({breakeven.upperPct.toFixed(1)}%)</span>
+                  )}
+                </span>
+              </div>
+            )}
             {/* Action buttons */}
             <div className="flex items-center gap-1">
               <button
@@ -153,7 +200,7 @@ export function StrategyRow({ strategy, onSelect, isSelected, onRemove }: Props)
               {/* Remove from view */}
               {!confirmRemove ? (
                 <button
-                  onClick={() => setConfirmRemove(true)}
+                  onClick={(e) => { e.stopPropagation(); setConfirmRemove(true) }}
                   className="p-1 text-text-muted hover:text-loss transition-colors"
                   title="Remove from strategies view"
                 >
@@ -163,13 +210,13 @@ export function StrategyRow({ strategy, onSelect, isSelected, onRemove }: Props)
                 <div className="flex items-center gap-1 ml-1">
                   <span className="text-[10px] text-text-muted">Remove?</span>
                   <button
-                    onClick={() => onRemove(strategy.id)}
+                    onClick={(e) => { e.stopPropagation(); onRemove(strategy.id) }}
                     className="px-2 py-0.5 text-[10px] font-medium bg-loss text-white rounded transition-colors hover:bg-red-600"
                   >
                     Yes
                   </button>
                   <button
-                    onClick={() => setConfirmRemove(false)}
+                    onClick={(e) => { e.stopPropagation(); setConfirmRemove(false) }}
                     className="px-2 py-0.5 text-[10px] font-medium border border-border-default text-text-secondary rounded hover:text-text-primary transition-colors"
                   >
                     No
@@ -215,35 +262,39 @@ export function StrategyRow({ strategy, onSelect, isSelected, onRemove }: Props)
       {/* Spacer row between strategies */}
       <tr className="h-2 bg-transparent" />
 
-      <AlertConfigModal open={alertOpen} onOpenChange={setAlertOpen} strategy={strategy} />
-      <ExitConfirmModal open={exitOpen} onOpenChange={setExitOpen} strategy={strategy} />
-
-      <Dialog.Root open={rulesOpen} onOpenChange={setRulesOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/60 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[560px] max-w-[95vw] h-[580px] bg-surface-1 border border-border-default rounded-xl shadow-modal overflow-hidden flex flex-col">
-            <Dialog.Title className="sr-only">Alert Rules</Dialog.Title>
-            <AlertList
-              strategyId={strategy.id}
-              strategyName={strategy.name}
-              positionLegs={[...strategy.legs]
-                .sort((a, b) => {
-                  if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
-                  return a.legIndex - b.legIndex
-                })
-                .map((l, i) => ({
-                  leg_id:     l.id,
-                  symbol:     l.instrument.symbol,
-                  side:       l.side,
-                  legNumber:  i + 1,
-                  strike:     l.instrument.strike ?? null,
-                  optionType: l.instrument.instrumentType,
-                }))
-              }
-            />
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {createPortal(
+        <>
+          <AlertConfigModal open={alertOpen} onOpenChange={setAlertOpen} strategy={strategy} />
+          <ExitConfirmModal open={exitOpen} onOpenChange={setExitOpen} strategy={strategy} />
+          <Dialog.Root open={rulesOpen} onOpenChange={setRulesOpen}>
+            <Dialog.Portal>
+              <Dialog.Overlay className="fixed inset-0 bg-black/60 z-50" />
+              <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[560px] max-w-[95vw] h-[580px] bg-surface-1 border border-border-default rounded-xl shadow-modal overflow-hidden flex flex-col">
+                <Dialog.Title className="sr-only">Alert Rules</Dialog.Title>
+                <AlertList
+                  strategyId={strategy.id}
+                  strategyName={strategy.name}
+                  positionLegs={[...strategy.legs]
+                    .sort((a, b) => {
+                      if (a.side !== b.side) return a.side === 'BUY' ? -1 : 1
+                      return a.legIndex - b.legIndex
+                    })
+                    .map((l, i) => ({
+                      leg_id:     l.id,
+                      symbol:     l.instrument.symbol,
+                      side:       l.side,
+                      legNumber:  i + 1,
+                      strike:     l.instrument.strike ?? null,
+                      optionType: l.instrument.instrumentType,
+                    }))
+                  }
+                />
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        </>,
+        document.body
+      )}
     </>
   )
 }

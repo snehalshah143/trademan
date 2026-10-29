@@ -1,0 +1,120 @@
+# =============================================================================
+# Directional Index Credit Spread — MONITORING & ADJUSTMENT script settings
+# =============================================================================
+# This config is used by:
+#   strategies/credit_spread/strategy_monitoring_adjustment/
+#     monitoring_index_credit_spread_directional_weekly.py
+#
+# Assumed: a position has already been entered (by the execution script or
+# manually).  This script picks up the open position via recovery, then runs
+# the monitoring/SL/profit-booking loop until exit.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# OpenAlgo connection  →  set once in config/global_settings.yaml
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Strategy identity — MUST match the execution script's STRATEGY_ID_PREFIX
+# ---------------------------------------------------------------------------
+STRATEGY_NAME: "INDEX_CS_DIRECTIONAL"
+STRATEGY_ID_PREFIX: "ICS"
+
+# ---------------------------------------------------------------------------
+# Execution mode for exits
+# ---------------------------------------------------------------------------
+EXECUTION_MODE: "MONITOR_ONLY"              # change to EXIT_EXEC_MONITOR or FULL_EXEC for live
+
+# ---------------------------------------------------------------------------
+# Instrument
+# ---------------------------------------------------------------------------
+UNDERLYING: "NIFTY"
+EXCHANGE_INDEX: "NSE_INDEX"
+EXCHANGE_OPTIONS: "NFO"
+LOT_SIZE: 65
+STRIKE_INTERVAL: 50
+
+# ---------------------------------------------------------------------------
+# Monitoring loop
+# ---------------------------------------------------------------------------
+MONITORING_INTERVAL: 60                     # seconds between monitoring cycles (1 min default)
+
+# ---------------------------------------------------------------------------
+# Stop-loss
+# ---------------------------------------------------------------------------
+INITIAL_SL_POINTS: 3000                     # ₹ MTM loss before SL exit
+SL_AS_SPREAD_MULTIPLE: 1.5                  # if > 0, overrides INITIAL_SL_POINTS
+
+# ---------------------------------------------------------------------------
+# Trailing stop-loss
+# ---------------------------------------------------------------------------
+TRAIL_TYPE: "MTM_STEP"                      # NONE | MTM_STEP | SPOT_STEP | SUPERTREND
+TRAIL_STEP: 500                             # ₹ step for MTM_STEP (or points for SPOT_STEP)
+TRAIL_ACTIVATION: 2000                      # MTM must reach this ₹ before trailing activates
+
+# Supertrend trail (used when TRAIL_TYPE = SUPERTREND)
+SUPERTREND_PERIOD: 11
+SUPERTREND_FACTOR: 2.5
+TRAIL_TIMEFRAME: "15m"                      # candle timeframe for ST trail calculation
+
+# ---------------------------------------------------------------------------
+# Profit-booking ladder
+# Each rung: mtm threshold (₹) and percentage of remaining lots to exit
+# ---------------------------------------------------------------------------
+PROFIT_LADDER:
+  - mtm: 2000
+    exit_pct: 50
+  - mtm: 3500
+    exit_pct: 50
+
+# ---------------------------------------------------------------------------
+# Reversal exit: if Supertrend flips against our bias, exit immediately
+# ---------------------------------------------------------------------------
+EXIT_ON_SUPERTREND_FLIP: true
+
+# ---------------------------------------------------------------------------
+# Expiry-day & T-1 handling
+# ---------------------------------------------------------------------------
+EXPIRY_DAY_EXIT_TIME: "15:00"              # force-exit at this time on expiry day
+T1_EXIT_TIME: "15:15"                      # force-exit T-1 (leave early if config says so)
+EXIT_ON_T1: false                           # exit on T-1 day instead of expiry day
+
+# ---------------------------------------------------------------------------
+# Trade validity — controls whether overnight positions are allowed
+# ---------------------------------------------------------------------------
+# INTRADAY  : forced square-off at INTRADAY_EXIT_TIME regardless of P&L
+# POSITIONAL: no forced intraday exit; position carries overnight
+#             (expiry-day and SL exits still apply)
+TRADE_VALIDITY: "INTRADAY"                 # INTRADAY | POSITIONAL
+INTRADAY_EXIT_TIME: "15:10"               # force-exit time when TRADE_VALIDITY=INTRADAY
+
+# ---------------------------------------------------------------------------
+# Order execution
+# ---------------------------------------------------------------------------
+MAX_ORDER_RETRY: 3
+ORDER_POLL_INTERVAL: 2.0
+ORDER_FILL_TIMEOUT: 60.0
+
+# ---------------------------------------------------------------------------
+# Warm-up (for indicator-based trailing — e.g. Supertrend)
+# ---------------------------------------------------------------------------
+WARMUP_BARS: 100                            # 100 × 15m = ~25 hrs (~3 trading days)
+
+# ---------------------------------------------------------------------------
+# Persistence — MUST use same DB as execution script
+# ---------------------------------------------------------------------------
+DATABASE_URL: "sqlite:///logs/strategies.db"
+STATE_SNAPSHOT_PATH: "logs/cs_monitoring_state.json"
+PAPER_SNAPSHOT_PATH: "logs/cs_paper_state.json"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOG_FILE: "logs/cs_monitoring.log"
+LOG_LEVEL: "DEBUG"
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+# Telegram settings  →  set in config/global_settings.yaml
+# Override here to use different settings for this strategy only.

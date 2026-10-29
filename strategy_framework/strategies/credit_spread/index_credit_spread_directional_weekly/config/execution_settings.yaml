@@ -1,0 +1,151 @@
+# =============================================================================
+# Directional Index Credit Spread — EXECUTION script settings
+# =============================================================================
+# This config is used by:
+#   strategies/credit_spread/strategy_execution/execution_index_credit_spread_directional_weekly.py
+#
+# Set EXECUTION_MODE to one of:
+#   MONITOR_ONLY        — log signals only; no orders placed (safe default)
+#   ENTRY_EXEC_MONITOR  — auto-enter on signal; manual exit
+#   EXIT_EXEC_MONITOR   — auto-exit on trigger; manual entry
+#   FULL_EXEC           — fully automated entry + exit
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# OpenAlgo connection  →  set once in config/global_settings.yaml
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Strategy identity
+# ---------------------------------------------------------------------------
+STRATEGY_NAME: "INDEX_CS_DIRECTIONAL"
+STRATEGY_ID_PREFIX: "ICS"                   # strategy_id = ICS_YYYYMMDD
+
+# ---------------------------------------------------------------------------
+# Execution mode
+# Set EXECUTION_MODE to one of:
+#   MONITOR_ONLY        — log signals only; no orders placed (safe default)
+#   ENTRY_EXEC_MONITOR  — auto-enter on signal; manual exit
+#   EXIT_EXEC_MONITOR   — auto-exit on trigger; manual en
+# ---------------------------------------------------------------------------
+EXECUTION_MODE: "MONITOR_ONLY"              # MONITOR_ONLY | ENTRY_EXEC_MONITOR | EXIT_EXEC_MONITOR | FULL_EXEC
+
+# ---------------------------------------------------------------------------
+# Instrument
+# ---------------------------------------------------------------------------
+UNDERLYING: "NIFTY"
+EXCHANGE_INDEX: "NSE_INDEX"
+EXCHANGE_OPTIONS: "NFO"
+LOT_SIZE: 65                                # NIFTY lot size; auto-fetched if 0
+
+# ---------------------------------------------------------------------------
+# Expiry selection
+# ---------------------------------------------------------------------------
+EXPIRY_MODE: "WEEKLY"                       # WEEKLY | MONTHLY | NEAREST
+DTE_MIN: 1                                  # skip expiry if DTE < this
+DTE_MAX: 14                                 # skip expiry if DTE > this (weekly window)
+# Rollover logic for DTE=1 expiry:
+#   time < EXPIRY_ROLLOVER_TIME  → use current week expiry (enough time to trade)
+#   time >= EXPIRY_ROLLOVER_TIME → skip to next week expiry (too late)
+EXPIRY_ROLLOVER_TIME: "11:00"               # IST cutoff for DTE=1 rollover
+
+# ---------------------------------------------------------------------------
+# Spread parameters
+# ---------------------------------------------------------------------------
+# SPREAD_TYPE is auto-determined from signal (BULL_PUT_SPREAD or BEAR_CALL_SPREAD)
+# OTM_DISTANCE:
+#   0   = sell strike immediately at/below spot (put) or at/above spot (call)
+#   +ve = sell further OTM  e.g. +200 → safer, lower premium collected
+#   -ve = sell ITM (aggressive) e.g. -50, spot=24820 → sells 24850PE or 24800CE
+OTM_DISTANCE: 0
+SPREAD_WIDTH: 250                           # points between short and hedge (long) strike
+STRIKE_INTERVAL: 50                         # NIFTY=50, BANKNIFTY=30, SENSEX=100
+
+# ---------------------------------------------------------------------------
+# Position sizing
+# ---------------------------------------------------------------------------
+SIZING_MODE: "FIXED"                        # FIXED | MARGIN_BASED
+
+FIXED_LOTS: 1                               # used when SIZING_MODE=FIXED
+MAX_LOTS: 10                                # hard cap regardless of sizing mode
+
+# MARGIN_BASED sizing — used when SIZING_MODE=MARGIN_BASED
+# Formula: lots = floor(DEPLOYED_CAPITAL / (margin_per_lot × (1 + MARGIN_BUFFER_PCT/100)))
+# Example: DEPLOYED_CAPITAL=500000, margin_per_lot=50000, MARGIN_BUFFER_PCT=15
+#          → effective_margin = 57500  →  lots = floor(500000/57500) = 8
+DEPLOYED_CAPITAL: 100000                    # ₹ capital ring-fenced for this strategy
+                                            # 0 = use live available_cash from broker funds API
+MARGIN_BUFFER_PCT: 15.0                     # % buffer on top of API margin (covers MTM swings)
+CAPITAL_UTILISATION_PCT: 100.0             # % of DEPLOYED_CAPITAL to actually deploy
+
+FREEZE_QTY: 1800                            # NSE per-order freeze limit for NIFTY
+
+# ---------------------------------------------------------------------------
+# Signal — entry conditions
+# ---------------------------------------------------------------------------
+SIGNAL_TIMEFRAME: "1m"                      # M1 candle drives evaluation loop
+INDICATOR_TIMEFRAME: "15m"                  # M15 candle drives indicator computation
+CONFIRMATION_BARS: 2                        # M1 bars Base+RSI must hold after ST flip
+SIGNAL_COOLDOWN_BARS: 2                     # bars (NOT seconds/minutes) to suppress signal after a failed entry
+                                            # actual time = SIGNAL_COOLDOWN_BARS × SIGNAL_TIMEFRAME
+                                            # e.g. 2 bars × 1m = 2 minutes suppression
+
+# Entry conditions:
+#   Gate  : M15 SuperTrend flips direction  (no confirmation needed — fires the gate)
+#   Confirm (CONFIRMATION_BARS consecutive M1 closes after gate opens):
+#     BULLISH: M15_Close > M15_EMA21  AND  M15_RSI14 > M15_RSI14_EMA21
+#     BEARISH: M15_Close < M15_EMA21  AND  M15_RSI14 < M15_RSI14_EMA21
+
+# RSI
+RSI_PERIOD: 14
+RSI_EMA_PERIOD: 21                          # EMA period applied to the RSI series
+
+# Price EMA (base condition)
+EMA_SLOW_PERIOD: 21                         # M15 Close > EMA21 for bullish base condition
+
+# Supertrend
+SUPERTREND_PERIOD: 11
+SUPERTREND_FACTOR: 2.5
+
+# ---------------------------------------------------------------------------
+# Warm-up (historical bars loaded before the first live candle)
+# ---------------------------------------------------------------------------
+WARMUP_BARS: 100                            # number of historical 1-min bars to pre-load
+
+# ---------------------------------------------------------------------------
+# Entry timing window (IST)
+# ---------------------------------------------------------------------------
+ENTRY_START_TIME: "09:20"
+ENTRY_END_TIME: "15:00"
+
+# ---------------------------------------------------------------------------
+# Stop-loss at entry
+# ---------------------------------------------------------------------------
+INITIAL_SL_POINTS: 3000                     # MTM loss in ₹ before emergency exit
+SL_AS_SPREAD_MULTIPLE: 1.5                  # SL = max_loss × this multiple (0 = use INITIAL_SL_POINTS)
+
+# ---------------------------------------------------------------------------
+# Order execution
+# ---------------------------------------------------------------------------
+MAX_ORDER_RETRY: 3
+ORDER_POLL_INTERVAL: 2.0                    # seconds between order status polls
+ORDER_FILL_TIMEOUT: 60.0                    # seconds before declaring fill timeout
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+DATABASE_URL: "sqlite:///logs/strategies.db"
+STATE_SNAPSHOT_PATH: "logs/cs_execution_state.json"
+PAPER_SNAPSHOT_PATH: "logs/cs_paper_state.json"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOG_FILE: "logs/cs_execution.log"
+LOG_LEVEL: "DEBUG"
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+# Telegram settings  →  set in config/global_settings.yaml
+# Override here to use different settings for this strategy only.

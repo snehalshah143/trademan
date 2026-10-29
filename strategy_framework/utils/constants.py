@@ -79,3 +79,50 @@ ORDER_FILL_TIMEOUT_SECONDS = 60
 # Heartbeat separator
 # ---------------------------------------------------------------------------
 HEARTBEAT_SEPARATOR = "=" * 52
+
+# ---------------------------------------------------------------------------
+# Credit spread — execution modes
+# ---------------------------------------------------------------------------
+EXEC_MODE_MONITOR_ONLY       = "MONITOR_ONLY"       # no orders placed; log only
+EXEC_MODE_ENTRY_EXEC_MONITOR = "ENTRY_EXEC_MONITOR" # entries executed; exits manual
+EXEC_MODE_EXIT_EXEC_MONITOR  = "EXIT_EXEC_MONITOR"  # exits executed; entries manual
+EXEC_MODE_FULL_EXEC          = "FULL_EXEC"           # both entry and exit automated
+
+EXEC_MODES_ALL = (
+    EXEC_MODE_MONITOR_ONLY,
+    EXEC_MODE_ENTRY_EXEC_MONITOR,
+    EXEC_MODE_EXIT_EXEC_MONITOR,
+    EXEC_MODE_FULL_EXEC,
+)
+
+# ---------------------------------------------------------------------------
+# Credit spread — spread types
+# ---------------------------------------------------------------------------
+SPREAD_BULL_PUT  = "BULL_PUT_SPREAD"
+SPREAD_BEAR_CALL = "BEAR_CALL_SPREAD"
+
+# ---------------------------------------------------------------------------
+# Credit spread — exit reasons
+# ---------------------------------------------------------------------------
+EXIT_REASON_SL_HIT    = "SL_HIT"
+EXIT_REASON_TARGET    = "TARGET"
+EXIT_REASON_EXPIRY    = "EXPIRY"
+EXIT_REASON_MANUAL    = "MANUAL"
+EXIT_REASON_ST_FLIP   = "SUPERTREND_FLIP"
+EXIT_REASON_LADDER    = "PROFIT_LADDER"
+
+# ---------------------------------------------------------------------------
+# Credit spread — signal & trailing defaults
+# ---------------------------------------------------------------------------
+DEFAULT_CONFIRMATION_BARS = 2        # N-check default
+DEFAULT_TRAIL_STEP        = 500.0    # MTM step-trail default (₹)
+DEFAULT_TRAIL_ACTIVATION  = 1000.0   # MTM must reach this before trailing kicks in
+
+# ---------------------------------------------------------------------------
+# NFO freeze quantities (NSE per-order lot limits for common underlyings)
+# Update from https://nseindia.com/regulations/member-regulation/circular periodically
+# ---------------------------------------------------------------------------
+FREEZE_QTY_NIFTY     = 1800   # NIFTY  @ 25 lot size → 1800 qty = 72 lots
+FREEZE_QTY_BANKNIFTY = 900    # BANKNIFTY @ 15 lot size → 900 qty = 60 lots
+FREEZE_QTY_FINNIFTY  = 1800   # FINNIFTY @ 40 lot size → 1800 qty = 45 lots
+FREEZE_QTY_SENSEX    = 1000   # BSE SENSEX

@@ -75,13 +75,25 @@ async def get_positions(db: AsyncSession = Depends(get_db)):
             "leg_id":      leg.id,
         }
 
+    # Fyers returns numeric exchange codes; map them to standard strings
+    _EXCHANGE_MAP = {
+        "10": "NSE", "11": "NFO", "12": "BSE",
+        "13": "BFO", "20": "MCX", "21": "CDS",
+    }
+
     enriched = []
     for p in raw_positions:
+        raw_exchange = p.get("exchange", "NFO")
+        try:
+            exchange_str = _EXCHANGE_MAP.get(str(int(float(raw_exchange))), str(raw_exchange))
+        except (ValueError, TypeError):
+            exchange_str = str(raw_exchange) if raw_exchange else "NFO"
+
         ctx = symbol_map.get(p["symbol"], {})
         enriched.append(
             PositionOut(
                 symbol=p["symbol"],
-                exchange=p.get("exchange", "NFO"),
+                exchange=exchange_str,
                 qty=int(p.get("qty", 0)),
                 buy_avg=float(p.get("buy_avg", 0)),
                 sell_avg=float(p.get("sell_avg", 0)),

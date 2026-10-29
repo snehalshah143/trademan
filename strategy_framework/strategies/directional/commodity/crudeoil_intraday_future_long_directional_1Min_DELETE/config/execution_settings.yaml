@@ -1,0 +1,126 @@
+# =============================================================================
+# Crudeoil Intraday Futures — EXECUTION script settings
+# =============================================================================
+# This config is used by:
+#   strategies/directional/commodity/crudeoil_intraday_future_long_directional/
+#     execution_crudeoil_intraday_future_long_directional.py
+#
+# Set EXECUTION_MODE to one of:
+#   MONITOR_ONLY        — log signals only; no orders placed (safe default)
+#   ENTRY_EXEC_MONITOR  — auto-enter on signal; monitoring script handles exit
+#   EXIT_EXEC_MONITOR   — paper entry; monitoring script places live exits
+#   FULL_EXEC           — fully automated entry + exit
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# OpenAlgo connection  →  set once in config/global_settings.yaml
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Strategy identity
+# ---------------------------------------------------------------------------
+STRATEGY_NAME: "COIL_INTRADAY_FUT"
+STRATEGY_ID_PREFIX: "COIL"                  # strategy_id = COIL_YYYYMMDD
+
+# ---------------------------------------------------------------------------
+# Execution mode
+# ---------------------------------------------------------------------------
+EXECUTION_MODE: "MONITOR_ONLY"              # MONITOR_ONLY | ENTRY_EXEC_MONITOR | EXIT_EXEC_MONITOR | FULL_EXEC
+
+# ---------------------------------------------------------------------------
+# Instrument (MCX Crudeoil Futures)
+# ---------------------------------------------------------------------------
+UNDERLYING: "CRUDEOIL"
+EXCHANGE: "MCX"
+EXCHANGE_INDEX: "MCX"                       # required by Config validator; not used for futures
+EXCHANGE_OPTIONS: "MCX"                     # required by Config validator; not used for futures
+INSTRUMENT_TYPE: "futures"                  # OpenAlgo instrument type for commodity futures
+PRODUCT: "MIS"                              # MIS = intraday; NRML = positional/overnight
+LOT_SIZE: 100                               # 100 barrels per lot (MCX standard)
+
+# ---------------------------------------------------------------------------
+# Expiry selection
+# ---------------------------------------------------------------------------
+# select_expiry uses NEAREST mode with DTE >= 3.
+# If the nearest contract has DTE < 3 (too close to expiry), it automatically
+# rolls to the next contract.
+DTE_MIN: 3                                  # minimum days-to-expiry; roll if nearest < this
+
+# ---------------------------------------------------------------------------
+# Trade direction
+# ---------------------------------------------------------------------------
+# LONG only strategy — only BUY futures on BULLISH signal.
+TRADE_DIRECTION: "LONG"
+
+# ---------------------------------------------------------------------------
+# Position sizing
+# ---------------------------------------------------------------------------
+FIXED_LOTS: 1                               # number of lots to trade
+MAX_LOTS: 5                                 # hard cap
+
+# Capital ring-fenced for margin preflight logging (0 = skip check)
+DEPLOYED_CAPITAL: 0
+
+# ---------------------------------------------------------------------------
+# Entry conditions — 1-min candle timeframe
+# ---------------------------------------------------------------------------
+# All three must be true simultaneously on a closed 1-min candle:
+#   1. M1-Close > M1-Supertrend(SUPERTREND_PERIOD, SUPERTREND_FACTOR)
+#   2. M1-MACD(MACD_FAST, MACD_SLOW, MACD_SIGNAL) > MACD Signal
+#      OR  M1-RSI14-EMA(RSI_EMA_FAST_PERIOD) > M1-RSI14-EMA(RSI_EMA_SLOW_PERIOD)
+#   3. M1-RSI14 > M1-RSI14-EMA(RSI_EMA_SLOW_PERIOD)
+# Signal fires on the FIRST bar where all three conditions hold.
+# ---------------------------------------------------------------------------
+
+# RSI
+RSI_PERIOD: 14
+
+# RSI EMA (two periods applied to the RSI-14 series)
+RSI_EMA_FAST_PERIOD: 8
+RSI_EMA_SLOW_PERIOD: 21
+
+# MACD  (applied to price closes)
+MACD_FAST: 8
+MACD_SLOW: 21
+MACD_SIGNAL: 5
+
+# Supertrend
+SUPERTREND_PERIOD: 11
+SUPERTREND_FACTOR: 2.0
+
+# ---------------------------------------------------------------------------
+# Warm-up
+# ---------------------------------------------------------------------------
+WARMUP_BARS: 100                            # historical 1-min bars loaded before live trading
+
+# ---------------------------------------------------------------------------
+# Entry timing window (IST)
+# MCX commodity trading: 09:10 – 23:00 IST
+# Allow entries from 09:10 (skip opening volatility) until 23:00 (MCX MIS sq-off ~23:15).
+# ---------------------------------------------------------------------------
+ENTRY_START_TIME: "09:05"
+ENTRY_END_TIME: "23:00"
+
+# ---------------------------------------------------------------------------
+# Order execution
+# ---------------------------------------------------------------------------
+MAX_ORDER_RETRY: 3
+ORDER_POLL_INTERVAL: 2.0                    # seconds between order status polls
+ORDER_FILL_TIMEOUT: 60.0                    # seconds before declaring fill timeout
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+DATABASE_URL: "sqlite:///logs/strategies.db"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOG_FILE: "logs/coil_execution.log"
+LOG_LEVEL: "DEBUG"
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+# Telegram settings  →  set in config/global_settings.yaml
+# Override here to use different settings for this strategy only.

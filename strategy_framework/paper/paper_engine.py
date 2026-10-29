@@ -100,13 +100,30 @@ class PaperEngine:
         quantity: int,
         ltp: float,
         product: str = "NRML",
+        slippage_pct: float = 0.0,
     ) -> str:
         """
-        Simulate an order fill at *ltp*.
+        Simulate an order fill at *ltp* with optional bid/ask slippage.
+
+        Parameters
+        ----------
+        ltp          : Last traded price (mid-price reference).
+        slippage_pct : Simulated bid/ask spread as a percentage of LTP.
+                       BUY  fills at ``ltp × (1 + slippage_pct/100)``  (pay the ask).
+                       SELL fills at ``ltp × (1 - slippage_pct/100)``  (hit the bid).
+                       Default 0.0 = fill at exact LTP (no slippage).
 
         Returns a virtual order ID (UUID prefix "PO-").
         Logs the virtual execution exactly like a live order would.
         """
+        if slippage_pct > 0:
+            if action.upper() == "BUY":
+                fill_price = ltp * (1 + slippage_pct / 100.0)
+            else:
+                fill_price = ltp * (1 - slippage_pct / 100.0)
+        else:
+            fill_price = ltp
+
         order_id = f"PO-{uuid.uuid4().hex[:8].upper()}"
         order = VirtualOrder(
             order_id=order_id,
@@ -115,7 +132,7 @@ class PaperEngine:
             exchange=exchange,
             action=action,
             quantity=quantity,
-            fill_price=ltp,
+            fill_price=fill_price,
             product=product,
         )
         self._orders.append(order)

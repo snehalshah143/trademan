@@ -6,10 +6,10 @@ import { alertRuleService } from '@/services/alertService'
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
-  { to: '/',         label: 'Position Manager', Icon: BarChart2 },
-  { to: '/alerts',   label: 'Alerts',            Icon: Bell },
-  { to: '/orders',   label: 'Order Book',        Icon: List },
-  { to: '/settings', label: 'Settings',          Icon: Settings },
+  { to: '/',            label: 'Position Manager', Icon: BarChart2 },
+  { to: '/alerts',      label: 'Alerts',           Icon: Bell },
+  { to: '/orders',      label: 'Order Book',       Icon: List },
+  { to: '/settings',    label: 'Settings',         Icon: Settings },
 ]
 
 export function Sidebar() {

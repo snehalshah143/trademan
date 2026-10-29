@@ -37,10 +37,10 @@ export function App() {
   return (
     <AppShell>
       <Routes>
-        <Route path="/"         element={<PositionManager />} />
-        <Route path="/alerts"   element={<AlertManager />} />
-        <Route path="/orders"   element={<OrderBookPlaceholder />} />
-        <Route path="/settings" element={<Settings />} />
+        <Route path="/"            element={<PositionManager />} />
+        <Route path="/alerts"      element={<AlertManager />} />
+        <Route path="/orders"      element={<OrderBookPlaceholder />} />
+        <Route path="/settings"    element={<Settings />} />
       </Routes>
       <AlertToast />
     </AppShell>

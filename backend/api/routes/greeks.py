@@ -9,11 +9,18 @@ a background task that calls OpenAlgo's /api/v1/optiongreeks.
 """
 from __future__ import annotations
 
+import json
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.database import get_db
+from models.relational import Strategy as StrategyModel
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +55,10 @@ class StrategyGreeksResponse(BaseModel):
 # ── Route ──────────────────────────────────────────────────────────────────────
 
 @router.get("/{strategy_id}", response_model=StrategyGreeksResponse)
-async def get_strategy_greeks(strategy_id: str) -> StrategyGreeksResponse:
+async def get_strategy_greeks(
+    strategy_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> StrategyGreeksResponse:
     """
     Return cached greeks for all option legs of a strategy.
 
@@ -61,8 +71,31 @@ async def get_strategy_greeks(strategy_id: str) -> StrategyGreeksResponse:
     from services.greeks_service import greeks_cache, is_option
 
     legs_data = strategy_legs_mirror.get(strategy_id)
+
     if legs_data is None:
-        # Strategy not yet registered in alert pipeline — return empty
+        # Fall back: parse legs from the strategy's stored description JSON
+        try:
+            sid_uuid = uuid.UUID(strategy_id)
+            result = await db.execute(
+                select(StrategyModel).where(StrategyModel.id == sid_uuid)
+            )
+            row = result.scalar_one_or_none()
+            if row and row.description:
+                desc = json.loads(row.description)
+                legs_data = []
+                for leg in desc.get("legs", []):
+                    inst = leg.get("instrument", {})
+                    inst_type = inst.get("instrumentType", "")
+                    legs_data.append({
+                        "leg_id":      leg.get("id", ""),
+                        "symbol":      inst.get("symbol", ""),
+                        "action":      leg.get("side", "BUY"),
+                        "option_type": inst_type if inst_type in ("CE", "PE", "FUT") else "",
+                    })
+        except Exception as exc:
+            logger.debug("[greeks] fallback DB lookup failed for %s: %s", strategy_id, exc)
+
+    if not legs_data:
         return StrategyGreeksResponse(strategy_id=strategy_id, legs=[])
 
     leg_responses: List[LegGreeks] = []

@@ -40,6 +40,7 @@ _MCX_PREFIXES = (
     "ALUMINUM", "ZINC", "LEAD", "NICKEL", "MENTHAOIL",
 )
 _NSE_CASH = ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY")
+_BFO_CASH = ("SENSEX", "BANKEX")
 
 
 def _symbol_exchange(symbol: str) -> str:
@@ -48,7 +49,7 @@ def _symbol_exchange(symbol: str) -> str:
     if any(su.startswith(p) for p in _MCX_PREFIXES):
         return "MCX"
     if su in _NSE_CASH:
-        return "NSE"
+        return "NSE_INDEX"
     return "NFO"
 
 

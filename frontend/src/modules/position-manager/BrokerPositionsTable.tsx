@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import axios from 'axios'
+import axios, { type AxiosError } from 'axios'
 import { useLTPStore } from '@store/ltpStore'
 import { useQueries } from '@tanstack/react-query'
 import { WifiOff, Plus, Trash2, RefreshCw, AlertCircle, FolderPlus, Layers } from 'lucide-react'
@@ -206,6 +206,11 @@ export function BrokerPositionsTable() {
   const brokerConnected = !isError || rawPositions !== undefined
   const totalBrokerPnL  = (positions ?? []).reduce((s, p) => s + p.pnl, 0)
 
+  // Extract human-readable error detail from the axios 502 response
+  const errorDetail: string | null = error
+    ? ((error as AxiosError<{ detail?: string }>)?.response?.data?.detail ?? null)
+    : null
+
   const selectedBrokerPositions = (positions ?? []).filter((p) => selectedSyms.has(p.symbol))
   const selectedManualPositions = manualPositions.filter((m) => selectedManualIds.has(m.id))
   const selectedPositions = [
@@ -263,9 +268,33 @@ export function BrokerPositionsTable() {
 
       {/* Connection banner */}
       {!brokerConnected && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-loss/10 border-b border-loss/30 text-loss text-xs shrink-0">
-          <WifiOff size={13} />
-          <span>OpenAlgo is not connected. Broker positions unavailable.</span>
+        <div className="flex items-center justify-between gap-2 px-4 py-2 bg-loss/10 border-b border-loss/30 text-loss text-xs shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <WifiOff size={13} className="shrink-0" />
+            <span className="truncate">
+              {errorDetail
+                ? `OpenAlgo: ${errorDetail}`
+                : 'OpenAlgo broker session unavailable — log in to your broker via OpenAlgo.'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <a
+              href="http://127.0.0.1:5000"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-2 py-1 rounded bg-loss/20 hover:bg-loss/30 transition-colors text-loss font-medium"
+            >
+              Open OpenAlgo
+            </a>
+            <button
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-loss/20 hover:bg-loss/30 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw size={11} className={isFetching ? 'animate-spin' : ''} />
+              Retry
+            </button>
+          </div>
         </div>
       )}
 
@@ -356,8 +385,12 @@ export function BrokerPositionsTable() {
               <tr>
                 <td colSpan={9} className="px-4 py-3">
                   <div className="flex items-center gap-2 px-3 py-3 rounded-lg bg-surface-2 text-text-muted text-xs">
-                    <AlertCircle size={13} />
-                    Configure OpenAlgo in Settings to see live broker positions.
+                    <AlertCircle size={13} className="shrink-0" />
+                    <span>
+                      {errorDetail
+                        ? errorDetail
+                        : 'Configure OpenAlgo in Settings to see live broker positions.'}
+                    </span>
                   </div>
                 </td>
               </tr>
