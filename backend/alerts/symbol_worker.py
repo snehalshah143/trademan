@@ -214,6 +214,13 @@ class SymbolWorker:
         # Used so CANDLE-scope CROSS conditions compare closed-candle-to-closed-candle,
         # not tick-to-tick (which would always see the same price in prev vs current).
         self._closed_candle_history: dict[tuple[str, str], list[dict]] = {}
+        # Strategies whose context has already been advanced (prev→current) in
+        # the current tick.  Cleared at the top of every _process_tick call.
+        # Prevents update_context() being called twice for the same tick when a
+        # candle-close evaluation and a price evaluation both touch the same
+        # strategy — the second call would set prev_ctx == current_ctx, making
+        # CROSS_ABOVE / CROSS_BELOW impossible to fire for that tick.
+        self._ctx_updated_this_tick: set[str] = set()
 
     def enqueue(self, event: TickEvent) -> None:
         """Non-blocking.  Called from LTPService tick callback."""
@@ -253,6 +260,11 @@ class SymbolWorker:
         symbol = tick.symbol
         ltp    = tick.ltp
         ts     = tick.ts
+
+        # Reset per-tick context-update guard so every strategy gets exactly one
+        # prev→current context advancement per tick, regardless of how many
+        # evaluation paths (candle-close + price) touch the same strategy.
+        self._ctx_updated_this_tick.clear()
 
         # ── Update live LTP mirror ────────────────────────────────────────────
         from alerts.alert_pipeline import ltp_mirror
@@ -575,9 +587,15 @@ class SymbolWorker:
         if not rules:
             return
 
-        # Build context once per strategy per evaluation batch — zero I/O
+        # Build context once per strategy per evaluation batch — zero I/O.
+        # update_context() advances prev_ctx → current_ctx exactly ONCE per tick.
+        # If a candle-close evaluation already advanced the context this tick,
+        # skip the second advance so prev_ctx retains the previous tick's values —
+        # this is required for CROSS_ABOVE / CROSS_BELOW to fire correctly.
         ctx = self._build_context(strategy_id)
-        alert_cache.update_context(strategy_id, ctx)
+        if strategy_id not in self._ctx_updated_this_tick:
+            alert_cache.update_context(strategy_id, ctx)
+            self._ctx_updated_this_tick.add(strategy_id)
         current_ctx, prev_ctx = alert_cache.get_contexts(strategy_id)
 
         logger.debug(
@@ -615,6 +633,11 @@ class SymbolWorker:
                         self.partition_id, alert_id, rule.get("name"))
 
             alert_cache.set_cooldown(alert_id)
+            # Snapshot the rule BEFORE mark_triggered() may remove it from cache.
+            # The notification worker uses this snapshot so it never needs to
+            # re-fetch from cache (critical for trigger_once rules which are
+            # removed here and would otherwise return None in _find_rule).
+            rule_snapshot = dict(rule)
             alert_cache.mark_triggered(alert_id)
 
             event = AlertFiredEvent(
@@ -623,6 +646,7 @@ class SymbolWorker:
                 rule_name=rule.get("name", ""),
                 ctx=dict(current_ctx),
                 fired_at=datetime.now(tz=ZoneInfo("UTC")),
+                rule_snapshot=rule_snapshot,
             )
             try:
                 self._alert_queue.put_nowait(event)
@@ -710,6 +734,37 @@ class SymbolWorker:
         spot    = ltp_mirror.get(underlying, 0.0) if underlying else 0.0
         pnl_pct = (total_mtm / deployed * 100.0) if deployed > 0 else 0.0
 
+        # ── Breakeven computation (net-credit options strategies) ─────────────
+        # Formula: upper_be = short_CE_strike + net_premium_received
+        #          lower_be = short_PE_strike - net_premium_received
+        # net_premium = sum(SELL entry_prices) - sum(BUY entry_prices)
+        # Returns None when not applicable (e.g. futures-only, no entry prices).
+        upper_breakeven: float | None = None
+        lower_breakeven: float | None = None
+        try:
+            sell_ce = next(
+                (l for l in legs if l.get("action") == "SELL" and l.get("option_type") == "CE"),
+                None,
+            )
+            sell_pe = next(
+                (l for l in legs if l.get("action") == "SELL" and l.get("option_type") == "PE"),
+                None,
+            )
+            if sell_ce or sell_pe:
+                total_sell = sum(l.get("entry_price", 0.0) for l in legs if l.get("action") == "SELL")
+                total_buy  = sum(l.get("entry_price", 0.0) for l in legs if l.get("action") == "BUY")
+                net_premium = total_sell - total_buy
+                if sell_ce:
+                    _ce_strike = sell_ce.get("strike", 0.0)
+                    if _ce_strike and (_ce_strike > 0):
+                        upper_breakeven = _ce_strike + net_premium
+                if sell_pe:
+                    _pe_strike = sell_pe.get("strike", 0.0)
+                    if _pe_strike and (_pe_strike > 0):
+                        lower_breakeven = _pe_strike - net_premium
+        except Exception:
+            pass
+
         # Aggregate all indicator values for the underlying.
         # For options strategies: underlying="NIFTY", leg="NIFTY25MAY24000CE"
         #   → indicators built under "NIFTY" (direct index tick feed) ✓
@@ -771,6 +826,8 @@ class SymbolWorker:
             "mtm":              total_mtm,
             "pnl_pct":          pnl_pct,
             "spot":             spot,
+            "upper_breakeven":  upper_breakeven,
+            "lower_breakeven":  lower_breakeven,
             "leg_ltps":         leg_ltps,
             "leg_entry_prices": leg_entry_prices,
             "leg_quantities":   leg_quantities,

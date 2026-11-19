@@ -75,18 +75,40 @@ async def notify(rule: dict, ctx: dict) -> None:
             logger.warning("[notify] sound event failed: %s", exc)
 
     # ── Telegram ───────────────────────────────────────────────────────────────
-    if rule.get("notify_telegram") and rule.get("telegram_chat_id"):
+    if rule.get("notify_telegram"):
         try:
             from core.config import settings
+            # Per-alert chat ID takes priority; fall back to global default.
+            chat_id = rule.get("telegram_chat_id") or \
+                      getattr(settings, "telegram_default_chat_id", "") or ""
             bot_token = getattr(settings, "telegram_bot_token", None)
-            if bot_token:
+
+            # Telegram requires numeric IDs or @username format.
+            # If the stored value is a plain username (no @, not numeric), add @.
+            if chat_id and not chat_id.startswith("@") \
+                       and not chat_id.startswith("-") \
+                       and not chat_id.lstrip("-").isdigit():
+                chat_id = f"@{chat_id}"
+
+            if bot_token and chat_id:
                 url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
                 async with httpx.AsyncClient(timeout=5) as client:
-                    await client.post(url, json={
-                        "chat_id": rule["telegram_chat_id"],
+                    resp = await client.post(url, json={
+                        "chat_id": chat_id,
                         "text":    f"🔔 {message}",
                         "parse_mode": "HTML",
                     })
+                if resp.status_code != 200:
+                    logger.warning(
+                        "[notify] Telegram API error %d for alert %s chat_id=%s: %s",
+                        resp.status_code, alert_id, chat_id, resp.text,
+                    )
+                else:
+                    logger.info("[notify] Telegram sent for alert %s to %s", alert_id, chat_id)
+            elif not bot_token:
+                logger.warning("[notify] Telegram skipped: TELEGRAM_BOT_TOKEN not configured")
+            elif not chat_id:
+                logger.warning("[notify] Telegram skipped: no chat_id on rule and no default set")
         except Exception as exc:
             logger.warning("[notify] Telegram failed: %s", exc)
 

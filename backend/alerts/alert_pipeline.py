@@ -62,13 +62,17 @@ async def _notification_worker(alert_queue: asyncio.Queue) -> None:
             # Persist trigger count + last_triggered to DB
             await _persist_trigger(event.alert_id)
 
-            # Find the full rule dict (for notification channels)
-            from alerts.alert_cache import alert_cache
-            rule = _find_rule(alert_cache, event.strategy_id, event.alert_id)
+            # Use the rule snapshot embedded in the event — avoids a cache
+            # lookup that would fail for trigger_once rules (already removed
+            # from cache by mark_triggered() before this worker runs).
+            from alerts.alert_cache import alert_cache, EvaluationContext
+            rule = event.rule_snapshot or _find_rule(alert_cache, event.strategy_id, event.alert_id)
             if rule:
-                from alerts.alert_cache import EvaluationContext
                 ctx = EvaluationContext(event.ctx)
                 await notify(rule, ctx)
+            else:
+                logger.warning("[NotificationWorker] rule not found for alert %s — notifications skipped",
+                               event.alert_id)
         except Exception as exc:
             logger.warning("[NotificationWorker] error for %s: %s",
                            event.alert_id, exc)
@@ -132,8 +136,17 @@ class AlertPipeline:
 
         self._alert_queue = make_queue(maxsize=1024)
 
+        # Build symbol→exchange map from OpenAlgo instrument data (Redis cache)
+        # Must run before _load_strategy_data() which calls add_symbols()
+        from adapters.openalgo_adapter import build_exchange_map_from_redis
+        await build_exchange_map_from_redis()
+
         # Load alert rules
         await alert_cache.reload()
+
+        # Restore pre-restart evaluation contexts so CROSS conditions fire
+        # immediately on the first real tick (not after a full oscillation).
+        await alert_cache.load_from_db()
 
         # Compute required EMA periods from active rules
         from alerts.symbol_worker import update_required_ema_periods
@@ -163,6 +176,14 @@ class AlertPipeline:
             asyncio.create_task(
                 _notification_worker(self._alert_queue),
                 name="notification-worker",
+            )
+        )
+
+        # Start context-snapshot flush task (persists ctx every 5 s)
+        self._tasks.append(
+            asyncio.create_task(
+                self._ctx_flush_task(),
+                name="ctx-flush",
             )
         )
 
@@ -196,7 +217,9 @@ class AlertPipeline:
         """
         from alerts.alert_cache import alert_cache
         from alerts.dependency_graph import dep_graph
+        from adapters.openalgo_adapter import build_exchange_map_from_redis
 
+        await build_exchange_map_from_redis()
         await alert_cache.reload()
 
         from alerts.symbol_worker import update_required_ema_periods
@@ -288,6 +311,7 @@ class AlertPipeline:
                         "entry_price": leg.entry_price or 0.0,
                         "quantity":    leg.quantity,
                         "option_type": leg.option_type or "",   # "CE"|"PE"|"FUT"|""
+                        "strike":      float(leg.strike or 0.0),
                     })
 
                 # Load underlyings
@@ -306,6 +330,7 @@ class AlertPipeline:
                         strategy_name_mirror[sid] = s.name
 
                 # Pass 1.5: remap backend-generated StrategyLeg.id → frontend leg UUIDs
+                #           AND register per-symbol exchange from description JSON.
                 #
                 # Problem: StrategyLeg.id is always uuid4() (backend-generated).
                 # The frontend stores its own UUID (crypto.randomUUID()) in condition
@@ -315,6 +340,12 @@ class AlertPipeline:
                 #
                 # Fix: read description JSON (stores full frontend Strategy object),
                 # match each DB leg to a JSON leg by symbol, use the JSON leg's id.
+                #
+                # Exchange registration: the frontend always stores the correct exchange
+                # (NSE/BSE/NFO/BFO/MCX/…) on each instrument.  We register these so
+                # the WS subscription uses the right exchange — critical for BSE equities
+                # (same symbol name as NSE) and BFO derivatives.
+                from adapters.openalgo_adapter import register_symbol_exchange as _reg_exch
                 for s in all_strategies:
                     try:
                         sid = str(_uuid.UUID(str(s.id)))
@@ -330,8 +361,13 @@ class AlertPipeline:
                         # symbol → frontend leg id (normalize to hyphenated)
                         sym_to_fid: dict[str, str] = {}
                         for dl in desc_legs:
-                            fid = dl.get("id") or ""
-                            sym = (dl.get("instrument") or {}).get("symbol") or ""
+                            inst = dl.get("instrument") or {}
+                            fid  = dl.get("id") or ""
+                            sym  = inst.get("symbol") or ""
+                            exch = inst.get("exchange") or ""
+                            # Register exchange override for WS subscription accuracy
+                            if sym and exch:
+                                _reg_exch(sym, exch)
                             if fid and sym:
                                 try:
                                     fid = str(_uuid.UUID(fid))
@@ -386,6 +422,10 @@ class AlertPipeline:
                             if not sym:
                                 continue
                             inst_type = inst.get("instrumentType", "")
+                            inst_exch = inst.get("exchange", "")
+                            # Register exchange for WS subscription accuracy
+                            if inst_exch:
+                                _reg_exch(sym, inst_exch)
                             legs_data.append({
                                 "leg_id":      fl.get("id", str(_uuid.uuid4())),
                                 "symbol":      sym,
@@ -393,6 +433,7 @@ class AlertPipeline:
                                 "entry_price": fl.get("entryPrice") or 0.0,
                                 "quantity":    int(fl.get("quantity", 1)),
                                 "option_type": inst_type if inst_type in ("CE", "PE", "FUT") else "",
+                                "strike":      float(inst.get("strike") or 0.0),
                             })
                         if legs_data:
                             strategy_legs_mirror[sid] = legs_data
@@ -429,6 +470,16 @@ class AlertPipeline:
         except Exception as exc:
             logger.warning("[AlertPipeline] strategy data load failed: %s", exc)
 
+
+    async def _ctx_flush_task(self) -> None:
+        """Persist dirty EvaluationContexts to DB every 5 seconds."""
+        from alerts.alert_cache import alert_cache
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await alert_cache.flush_to_db()
+            except Exception as exc:
+                logger.warning("[AlertPipeline] ctx flush error: %s", exc)
 
     async def _warmup_historical_candles(self) -> None:
         """
